@@ -1,10 +1,11 @@
+import json
 import logging
 from typing import Any, cast
 
 import firebase_admin
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from firebase_admin import auth
+from firebase_admin import auth, credentials
 
 from app.config import get_settings
 
@@ -13,7 +14,18 @@ settings = get_settings()
 
 # Initialize Firebase Admin app once for token verification.
 if not firebase_admin._apps:
-    firebase_admin.initialize_app(options={"projectId": settings.FIREBASE_PROJECT_ID})
+    if settings.FIREBASE_SERVICE_ACCOUNT_JSON:
+        service_account = json.loads(settings.FIREBASE_SERVICE_ACCOUNT_JSON)
+        cred = credentials.Certificate(service_account)
+
+        firebase_admin.initialize_app(
+            cred,
+            {"projectId": settings.FIREBASE_PROJECT_ID},
+        )
+    else:
+        firebase_admin.initialize_app(
+            options={"projectId": settings.FIREBASE_PROJECT_ID}
+        )
 
 security = HTTPBearer()
 
@@ -26,7 +38,9 @@ def _http_401(detail: str) -> HTTPException:
     )
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict[str, Any]:
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> dict[str, Any]:
     """
     Verify Firebase ID token and return decoded identity claims.
     """

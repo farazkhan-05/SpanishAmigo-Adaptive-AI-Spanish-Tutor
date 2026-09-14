@@ -7,6 +7,12 @@ export const createAppTheme = (mode = 'light') => {
   const isDark = mode === 'dark';
   const shadowColor = isDark ? shadowColorDark : shadowColorLight;
   const borderColor = isDark ? '#333333' : '#1A1A1A'; // slightly lighter border in dark mode
+  const brandColors = {
+    coral: '#FF6B6B',
+    teal: '#4ECDC4',
+    yellow: '#FFE66D',
+    purple: '#A78BFA',
+  };
 
   return createTheme({
     palette: {
@@ -53,6 +59,25 @@ export const createAppTheme = (mode = 'light') => {
     },
     shape: {
       borderRadius: 12,
+    },
+    spanishAmigo: {
+      colors: brandColors,
+      outline: {
+        color: isDark ? '#686879' : borderColor,
+        width: 3,
+      },
+      shadows: {
+        card: `6px 6px 0px ${shadowColor}`,
+        control: `3px 3px 0px ${shadowColor}`,
+      },
+      radii: {
+        control: 10,
+        surface: 16,
+      },
+      surfaces: {
+        canvas: isDark ? '#1A1A2E' : '#FFFDF2',
+        raised: isDark ? '#252542' : '#FFFFFF',
+      },
     },
     shadows: [
       'none',

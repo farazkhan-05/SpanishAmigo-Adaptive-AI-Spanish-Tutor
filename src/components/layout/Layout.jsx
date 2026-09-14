@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
 import { AppBar, Toolbar, Typography, Container, Box, IconButton, Button, Avatar, Menu, MenuItem } from '@mui/material';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { BookOpen, Moon, Sun, LogOut, User } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import SignInPromptModal from '../auth/SignInPromptModal';
 import GlobalChatbot from '../chat/GlobalChatbot';
 
 const Layout = ({ children, darkMode, onToggleDarkMode }) => {
+  const location = useLocation();
   const { user, isAnonymous, login, logout } = useAuth();
   const [anchorEl, setAnchorEl] = useState(null);
+  const isCourseMapRoute = location.pathname === '/';
 
   // Menu Handlers
   const handleMenu = (event) => setAnchorEl(event.currentTarget);
@@ -226,22 +228,32 @@ const Layout = ({ children, darkMode, onToggleDarkMode }) => {
 
       {/* Main Content */}
       <Container 
-        maxWidth="sm" 
+        maxWidth={isCourseMapRoute ? false : 'sm'}
         sx={{ 
           flexGrow: 1, 
           py: { xs: 3, md: 4 },
           px: { xs: 2, sm: 3 },
           position: 'relative',
           zIndex: 1,
+          ...(isCourseMapRoute && {
+            width: '100%',
+            maxWidth: {
+              xs: '100%',
+              sm: '760px',
+              md: '1120px',
+              lg: '1320px',
+              xl: '1400px',
+            },
+          }),
         }}
       >
         <Box
           sx={{
-            background: cardBg,
-            borderRadius: '16px',
-            padding: { xs: 2.5, md: 3.5 },
-            border: `3px solid ${borderColor}`,
-            boxShadow: `6px 6px 0px ${borderColor}`,
+            background: isCourseMapRoute ? 'transparent' : cardBg,
+            borderRadius: isCourseMapRoute ? 0 : '16px',
+            padding: isCourseMapRoute ? 0 : { xs: 2.5, md: 3.5 },
+            border: isCourseMapRoute ? 'none' : `3px solid ${borderColor}`,
+            boxShadow: isCourseMapRoute ? 'none' : `6px 6px 0px ${borderColor}`,
             position: 'relative',
             transition: 'all 0.3s ease',
           }}

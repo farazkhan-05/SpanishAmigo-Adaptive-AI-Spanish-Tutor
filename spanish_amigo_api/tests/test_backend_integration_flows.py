@@ -151,6 +151,28 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertIn("Cannot view another user's progress", response.json()["detail"])
 
+    def test_client_progress_user_id_cannot_override_verified_uid(self):
+        self._set_current_user("user-a")
+
+        response = self.client.post(
+            "/progress/complete",
+            json={"user_id": "user-b", "lesson_id": "1"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Cannot submit progress on behalf of another user", response.json()["detail"])
+
+    def test_anonymous_user_can_persist_the_current_progress_contract(self):
+        self._set_current_user("anonymous-user", provider="anonymous")
+
+        response = self.client.post(
+            "/progress/complete",
+            json={"user_id": "anonymous-user", "lesson_id": "1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["lesson_id"], "1")
+
     def test_tenancy_user_a_cannot_access_user_b_chat_history(self):
         session_id = self._seed_session_with_messages("user-b")
         self._set_current_user("user-a")
@@ -177,6 +199,37 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         self.assertIn("Cannot modify another user's session", rename_response.json()["detail"])
         self.assertEqual(delete_response.status_code, 403)
         self.assertIn("Cannot delete another user's session", delete_response.json()["detail"])
+
+    def test_session_list_only_returns_verified_users_sessions(self):
+        user_a_session = self._seed_session_with_messages("user-a", "User A")
+        self._seed_session_with_messages("user-b", "User B")
+        self._set_current_user("user-a")
+
+        response = self.client.get("/chat/sessions")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([session["id"] for session in response.json()], [user_a_session])
+
+    @patch("app.routers.chat.update_session_title_in_background", return_value=None)
+    @patch("app.routers.chat.tutor_graph.invoke")
+    def test_send_rejects_another_users_session_and_client_uid(self, mock_invoke, _mock_bg_title):
+        mock_invoke.side_effect = self._fake_tutor_invoke
+        session_id = self._seed_session_with_messages("user-b")
+        self._set_current_user("user-a")
+
+        mismatched_uid = self.client.post(
+            "/chat/send",
+            json={"user_id": "user-b", "message": "Hola", "session_id": None},
+        )
+        foreign_session = self.client.post(
+            "/chat/send",
+            json={"user_id": "user-a", "message": "Hola", "session_id": session_id},
+        )
+
+        self.assertEqual(mismatched_uid.status_code, 403)
+        self.assertEqual(foreign_session.status_code, 403)
+        self.assertIn("Invalid session ID", foreign_session.json()["detail"])
+        mock_invoke.assert_not_called()
 
     @patch("app.routers.chat.update_session_title_in_background", return_value=None)
     @patch("app.routers.chat.tutor_graph.invoke")
@@ -309,6 +362,37 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         self.assertIn('"token": "Hola"', body)
         self.assertIn('"token": " amigo"', body)
         self.assertIn("[DONE]", body)
+
+    @patch("app.routers.chat.update_session_title_in_background", return_value=None)
+    @patch("app.services.ai.save_memory_node", return_value={})
+    @patch("app.services.ai.prepare_tutor_messages", return_value=[HumanMessage(content="hola")])
+    @patch("app.services.ai.guardrails_node", return_value={"guardrail_blocked": False})
+    @patch("app.routers.chat.astream_with_fallback")
+    def test_stream_endpoint_preserves_theme_action_frame(
+        self,
+        mock_astream,
+        _mock_guardrails,
+        _mock_prepare,
+        _mock_save_memory,
+        _mock_bg_title,
+    ):
+        async def _fake_stream(*_args, **_kwargs):
+            class Chunk:
+                content = ""
+                tool_calls = [{"name": "toggle_theme"}]
+
+            yield Chunk()
+
+        mock_astream.side_effect = _fake_stream
+
+        response = self.client.post(
+            "/chat/send_stream",
+            json={"user_id": "user-a", "message": "dark mode", "session_id": None},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"action_required": "TOGGLE_THEME"', response.text)
+        self.assertIn("[DONE]", response.text)
 
     @patch("app.routers.chat.update_session_title_in_background", return_value=None)
     @patch("app.services.ai.save_memory_node", return_value={})

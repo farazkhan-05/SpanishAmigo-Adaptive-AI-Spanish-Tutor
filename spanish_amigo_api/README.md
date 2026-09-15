@@ -1,8 +1,6 @@
 # SpanishAmigo API
 
-FastAPI backend for SpanishAmigo. It powers lesson progress, Lumi chat, AI explanations, chat sessions, Firebase-authenticated user data, Neon Postgres persistence, and Cloud Run deployment.
-
-This is the backend-specific README. The root project README is intentionally not edited as part of backend production notes.
+FastAPI backend for SpanishAmigo. It powers lesson progress, Lumi chat, AI explanations, chat sessions, adaptive learning state/reviews, Firebase-authenticated user data, and Neon Postgres persistence.
 
 ## Current Stack
 
@@ -19,13 +17,14 @@ This is the backend-specific README. The root project README is intentionally no
 
 ## Runtime Services
 
-- `GET /health`: Cloud Run and database health check.
+- `GET /health`: Database and service health check.
 - `GET /status`: backward-compatible alias for `/health`.
 - `/progress/*`: protected progress read/write routes.
 - `/chat/send`: protected non-streaming Lumi chat route.
 - `/chat/send_stream`: protected SSE Lumi chat route.
 - `/chat/sessions/*`: protected chat session lifecycle routes.
 - `POST /chat/explain`: public explanation route used by lesson reveal cards.
+- `/adaptive/*`: protected adaptive learning state, review scheduling, and review submission routes.
 
 Protected routes require:
 
@@ -49,27 +48,22 @@ AUTH_ALLOW_INSECURE_DEV_TOKENS=true
 LOG_LEVEL=INFO
 ```
 
-Production Cloud Run sets:
+Production environment configuration:
 
 ```env
 ENV=production
 LOG_LEVEL=INFO
-FIREBASE_PROJECT_ID=...
-ALLOWED_CORS_ORIGINS=...
+FIREBASE_PROJECT_ID=<your-firebase-project-id>
+ALLOWED_CORS_ORIGINS=https://your-frontend-domain.vercel.app
 AUTH_ALLOW_INSECURE_DEV_TOKENS=false
-```
-
-Production secrets are mounted from Google Secret Manager:
-
-```text
-DATABASE_URL=DATABASE_URL:latest
-GEMINI_API_KEY=GEMINI_API_KEY:latest
+DATABASE_URL=postgresql://...
+GEMINI_API_KEY=...
 ```
 
 Important:
 
 - `AUTH_ALLOW_INSECURE_DEV_TOKENS=false` must stay enforced in production.
-- `ALLOWED_CORS_ORIGINS` is comma-separated and is passed through `--env-vars-file` in GitHub Actions to avoid comma parsing issues.
+- `ALLOWED_CORS_ORIGINS` is comma-separated (e.g. `https://example.vercel.app,http://localhost:5173`).
 
 ## Local Development
 
@@ -92,7 +86,12 @@ cd spanish_amigo_api
 uv run alembic upgrade head
 ```
 
-The GitHub Actions deploy workflow runs migrations before deploying the new Cloud Run revision.
+The backend runs migrations via Alembic:
+
+```powershell
+cd spanish_amigo_api
+uv run alembic upgrade head
+```
 
 ## Tests And Quality Gates
 
@@ -107,6 +106,11 @@ Targeted type check is configured through:
 
 ```text
 mypy.ini
+```
+
+```powershell
+cd spanish_amigo_api
+uv run --with mypy mypy app/config.py app/services/auth.py app/services/health.py main.py --config-file mypy.ini
 ```
 
 Dependency audit:
@@ -142,50 +146,17 @@ anonymous_chat_usage:<firebase_uid>
 
 ## Deployment
 
-Primary deployment path:
+The backend application is containerized with `Dockerfile`:
 
-```text
-.github/workflows/backend-deploy.yml
-```
-
-Deploy flow:
-
-1. Validate required GitHub secrets.
-2. Authenticate to Google Cloud with Workload Identity Federation.
-3. Build Docker image from this directory.
-4. Push image to Artifact Registry.
-5. Run Alembic migrations.
-6. Deploy Cloud Run revision.
-7. Verify `/health`.
-
-The Docker image excludes tests and migrations from the runtime image. Migrations are run by the deploy workflow before Cloud Run receives traffic.
-
-## Monitoring
-
-Monitoring-as-code lives in:
-
-```text
-spanish_amigo_api/deploy/monitoring
-```
-
-The manual workflow:
-
-```text
-.github/workflows/monitoring-bootstrap.yml
-```
-
-It creates:
-
-- Cloud Run overview dashboard.
-- 5xx spike alert.
-- p95 latency alert.
-- auth failure alert for 401/403 request logs.
-- logs-based metric `spanishamigo_auth_failures`.
+- Python 3.12 slim base image with `uv` for reproducible frozen dependency synchronization (`uv sync --frozen --no-dev`).
+- Uvicorn server running FastAPI on `$PORT` (default 8000).
+- Health check available at `GET /health`.
+- Target runtime database migrations must be applied (`uv run alembic upgrade head`) before traffic is routed.
 
 ## Security Notes
 
 - Firebase ID tokens are verified through Firebase Admin SDK.
-- Progress and chat/session routes enforce Firebase UID tenancy.
+- Progress, chat/session, and adaptive routes enforce Firebase UID tenancy.
 - Production uses JSON logs and request IDs.
 - Dependency security is gated by `pip-audit`, `npm audit`, and dependency review.
 - Known remaining hardening item: rate limiting for expensive LLM endpoints.

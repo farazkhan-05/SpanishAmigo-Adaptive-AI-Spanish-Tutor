@@ -114,8 +114,7 @@ Key areas:
 | Validation And Config | Pydantic, Pydantic Settings |
 | Package Management | npm, uv |
 | Containerization | Docker |
-| Deployment | Vercel, Google Cloud Run, Artifact Registry |
-| Secrets And Monitoring | Google Secret Manager, Cloud Monitoring |
+| Deployment | Vercel (Frontend), Docker-ready container (Backend) |
 | CI And Security | GitHub Actions, Dependabot, pip-audit, npm audit |
 
 ## Repository Layout
@@ -126,9 +125,7 @@ Key areas:
 |   |-- dependabot.yml
 |   `-- workflows/
 |       |-- backend-ci.yml
-|       |-- backend-deploy.yml
-|       |-- dependency-security.yml
-|       `-- monitoring-bootstrap.yml
+|       `-- dependency-security.yml
 |-- public/
 |-- src/
 |   |-- api/
@@ -152,8 +149,6 @@ Key areas:
 |   |   |-- database.py
 |   |   |-- models.py
 |   |   `-- schemas.py
-|   |-- deploy/
-|   |   `-- monitoring/
 |   |-- migrations/
 |   |-- tests/
 |   |-- Dockerfile
@@ -298,7 +293,12 @@ The current schema includes:
 - `lesson_slides`
 - `system_status`
 
-The deploy workflow runs migrations before deploying a new Cloud Run revision.
+Apply migrations to target database:
+
+```bash
+cd spanish_amigo_api
+uv run alembic upgrade head
+```
 
 ## Optional Lesson Retrieval Seeding
 
@@ -355,44 +355,16 @@ uv run --with pip-audit pip-audit --desc
 
 ### Frontend
 
-The frontend is configured for Vercel. `vercel.json` rewrites all routes to `index.html` so React Router can handle client-side navigation.
+The frontend is configured for Vercel. `vercel.json` rewrites all routes to `index.html` so React Router can handle client-side navigation. Production builds require `VITE_API_BASE_URL` pointing to the active backend API.
 
 ### Backend
 
-The backend is containerized with `spanish_amigo_api/Dockerfile` and deployed to Cloud Run through GitHub Actions.
-
-Primary workflow:
-
-```text
-.github/workflows/backend-deploy.yml
-```
-
-The deploy workflow:
-
-1. Validates required GitHub secrets.
-2. Authenticates to Google Cloud using Workload Identity Federation.
-3. Builds the backend Docker image.
-4. Pushes the image to Artifact Registry.
-5. Runs Alembic migrations.
-6. Deploys the Cloud Run service.
-7. Verifies the `/health` endpoint.
-
-Monitoring assets live in:
-
-```text
-spanish_amigo_api/deploy/monitoring
-```
-
-The monitoring workflow provisions dashboard and alert policy resources:
-
-```text
-.github/workflows/monitoring-bootstrap.yml
-```
+The backend is containerized using `spanish_amigo_api/Dockerfile` (`uv`-based Python 3.12 image). It exposes the FastAPI application on port 8000 (or the environment-configured `$PORT`) with a built-in health check on `/health`.
 
 ## Security And Reliability Notes
 
 - Firebase ID tokens are verified by the backend with Firebase Admin SDK.
-- Progress, chat, history, session, and explanation endpoints require authenticated Firebase users.
+- Progress, chat, history, session, explanation, and adaptive endpoints require authenticated Firebase users.
 - The backend enforces Firebase UID ownership on user-scoped routes.
 - Anonymous users are limited to three global Lumi chat messages before Google sign-in is required.
 - Chat request payloads are validated with Pydantic, including a maximum message length.
@@ -400,7 +372,7 @@ The monitoring workflow provisions dashboard and alert policy resources:
 - Streaming chat logs SSE generator failures with exception details while still returning a user-facing fallback message.
 - Background database work opens fresh SQLAlchemy sessions instead of reusing request-scoped sessions.
 - AI guardrails classify longer inputs and block obvious off-topic, unsafe, or prompt-injection requests.
-- Cloud Run deployments use secret-mounted `DATABASE_URL` and `GEMINI_API_KEY`.
+- Backend environments configure `DATABASE_URL` and `GEMINI_API_KEY`.
 - Dependency security is checked with Dependabot, `npm audit`, `pip-audit`, and GitHub dependency review.
 
 ## Current Status

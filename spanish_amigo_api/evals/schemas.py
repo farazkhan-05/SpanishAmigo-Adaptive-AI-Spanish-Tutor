@@ -51,3 +51,34 @@ class GoldenCase:
         if not isinstance(raw["notes"], str) or not raw["notes"].strip():
             raise CaseValidationError("notes must be a non-empty string")
         return cls(raw["id"], raw["category"], raw["user_input"], raw["expected_behavior"], raw["assessable_production"], tuple(lesson_ids), tuple(slide_ids), raw["notes"])
+
+
+@dataclass(frozen=True)
+class Phase5Case:
+    id: str
+    category: str
+    user_input: str
+    expected_assessable: bool
+    guardrail_blocked: bool
+    proposal: dict[str, Any] | None
+    expected_validation_status: str | None
+    expected_action: str
+    notes: str
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "Phase5Case":
+        required = {"id", "category", "user_input", "expected_assessable", "guardrail_blocked", "proposal", "expected_validation_status", "expected_action", "notes"}
+        if set(raw) != required:
+            raise CaseValidationError(f"phase5 fields must be exactly {sorted(required)}")
+        if not isinstance(raw["id"], str) or not raw["id"] or not isinstance(raw["category"], str) or not raw["category"]:
+            raise CaseValidationError("id and category must be non-empty strings")
+        if not isinstance(raw["user_input"], str) or not isinstance(raw["expected_assessable"], bool) or not isinstance(raw["guardrail_blocked"], bool):
+            raise CaseValidationError("invalid phase5 input/boolean fields")
+        if raw["proposal"] is not None and not isinstance(raw["proposal"], dict):
+            raise CaseValidationError("proposal must be an object or null")
+        allowed_statuses = {None, "accepted", "rejected", "ambiguous", "invalid", "low_confidence"}
+        if raw["expected_validation_status"] not in allowed_statuses:
+            raise CaseValidationError("invalid expected validation status")
+        if not isinstance(raw["expected_action"], str) or not isinstance(raw["notes"], str) or not raw["notes"]:
+            raise CaseValidationError("action and notes must be non-empty strings")
+        return cls(**raw)

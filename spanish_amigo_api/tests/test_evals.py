@@ -10,9 +10,9 @@ os.environ.setdefault("GEMINI_API_KEY", "test-key")
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from evals.baseline import baseline_configuration, validate_baseline_configuration
-from evals.loaders import DEFAULT_CASES_PATH, load_cases
-from evals.metrics import recall_at_k, reciprocal_rank
-from evals.run_eval import offline_report
+from evals.loaders import DEFAULT_CASES_PATH, PHASE5_CASES_PATH, load_cases, load_phase5_cases
+from evals.metrics import binary_macro_f1, recall_at_k, reciprocal_rank
+from evals.run_eval import offline_report, planner_offline_report
 
 
 class EvaluationTests(unittest.TestCase):
@@ -56,6 +56,18 @@ class EvaluationTests(unittest.TestCase):
 
     def test_retrieval_variants_are_named_without_redefining_baseline(self):
         self.assertEqual(baseline_configuration()["B"]["top_k"], 3)
+
+    def test_phase5_cases_and_planner_metrics_are_deterministic(self):
+        self.assertGreaterEqual(len(load_phase5_cases(PHASE5_CASES_PATH)), 20)
+        first = planner_offline_report(PHASE5_CASES_PATH)
+        self.assertEqual(first, planner_offline_report(PHASE5_CASES_PATH))
+        self.assertEqual(first["mode"], "OFFLINE C_planner METRIC TEST")
+        self.assertIn("false_accepted_evidence_rate", first["metrics"])
+        self.assertEqual(first["metrics"]["mastery_update_metrics"], "NOT IMPLEMENTED")
+
+    def test_binary_macro_f1_known_examples(self):
+        self.assertEqual(binary_macro_f1([True, False], [True, False]), 1.0)
+        self.assertAlmostEqual(binary_macro_f1([True, False], [False, False]), 1 / 3)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ The differentiator is evidence-backed long-term personalization, not more autono
 - Progress is locally cached and synchronised for authenticated Firebase identities. CourseMap limits anonymous users to lesson 1; it is not merely local guest progress.
 - Chat sessions/messages are Firebase-UID-owned, with history, list, rename, and delete endpoints. Anonymous global chat is limited to three messages per anonymous UID.
 - `/chat/send` is the non-streaming endpoint. `/chat/send_stream` sends SSE JSON frames for `session_id`, `token`, and optionally `action_required`, followed by `data: [DONE]`.
-- The compiled LangGraph currently runs `guardrails -> tutor -> save_memory`. Streaming currently orchestrates guardrails, preparation, model streaming, and persistence separately.
+- Phase 5's compiled LangGraph runs `plan_turn -> tutor -> save_memory`; a blocked plan routes directly to memory. Streaming calls the same authoritative pre-generation `plan_turn` and differs only in final token delivery and chat-memory persistence.
 - Current RAG is Gemini embedding cosine retrieval over PostgreSQL/pgvector `lesson_slides`.
 - The existing responsive CourseMap, CourseJourney, CourseSupportPanels, route-aware Layout, compact LessonPlayer, dark mode, and accessibility work are baseline functionality to extend, not rebuild.
 - Schema changes use Alembic; Python dependencies use `uv`/`uv.lock`, frontend dependencies use npm/`package-lock.json`.
@@ -50,6 +50,12 @@ LLMs propose structured assessments and generate curriculum-grounded teaching/pr
 `/chat/send` uses the compiled LangGraph. `/chat/send_stream` currently performs substantial orchestration independently. Future adaptive planning must converge on one authoritative shared planning/service layer; streaming may differ only in delivery.
 
 Do not duplicate assessability, evidence validation, policy, learner-state loading, retrieval decisions, or state-mutation rules between these routes.
+
+Phase 5 establishes `plan_turn` as that shared boundary. It completes guardrails, assessability, proposal validation/audit, learner-context loading, application-owned policy, retrieval selection, and grounded prompt preparation before either complete or streamed generation.
+
+### Assessment-validation boundary
+
+Structured model assessment is only a proposal. Text evidence is accepted only when it is grounded in the current turn, targets an atomic text-mode non-vocabulary skill, has a concrete result, and meets the centralized confidence threshold. Speech-required, contextual, broad vocabulary-domain, unsupported, malformed, and low-confidence proposals cannot become accepted evidence. Acceptance records validated evidence only; it does not imply mastery mutation.
 
 ## 8. Persistence principle
 

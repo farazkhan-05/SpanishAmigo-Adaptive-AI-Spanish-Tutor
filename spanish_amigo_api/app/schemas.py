@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
-from typing import Optional, List
+from typing import Literal, Optional, List
 
 class UserCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -84,3 +84,20 @@ class AdaptiveStateResponse(BaseModel):
     accepted_evidence_count: int = Field(..., ge=0)
     last_practiced_at: Optional[datetime] = None
     status: str = Field(..., pattern="^(not_assessed|evidence_insufficient|assessed)$")
+
+
+class AssessmentProposal(BaseModel):
+    """Strict, reasoning-free model proposal. Application validation is authoritative."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    assessable: bool
+    skill_id: str = Field(..., min_length=1, max_length=100)
+    result: Literal["correct", "incorrect", "partial", "unknown", "not_applicable"]
+    error_type: Optional[Literal["grammar", "vocabulary", "word_order", "agreement", "other"]] = None
+    severity: Optional[Literal[1, 2, 3]] = None
+    confidence: float = Field(..., ge=0, le=1)
+    evidence: str = Field(..., min_length=1, max_length=2000)
+    correction: Optional[str] = Field(None, max_length=2000)
+    misconception_id: Optional[str] = Field(None, max_length=100)
+    assessment_version: Literal["phase5-v1"]

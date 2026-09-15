@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections.abc import Sequence
 
 
 def recall_at_k(retrieved_ids: list[str], relevant_ids: set[str], k: int) -> float:
@@ -18,3 +19,24 @@ def reciprocal_rank(retrieved_ids: list[str], relevant_ids: set[str]) -> float:
 
 def mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
+
+
+def accuracy(expected: Sequence[object], observed: Sequence[object]) -> float | None:
+    if len(expected) != len(observed):
+        raise ValueError("expected and observed must have equal length")
+    return mean([float(a == b) for a, b in zip(expected, observed)])
+
+
+def binary_macro_f1(expected: list[bool], observed: list[bool]) -> float | None:
+    if len(expected) != len(observed):
+        raise ValueError("expected and observed must have equal length")
+    if not expected:
+        return None
+    scores = []
+    for label in (False, True):
+        tp = sum(a == label and b == label for a, b in zip(expected, observed))
+        fp = sum(a != label and b == label for a, b in zip(expected, observed))
+        fn = sum(a == label and b != label for a, b in zip(expected, observed))
+        denominator = 2 * tp + fp + fn
+        scores.append((2 * tp / denominator) if denominator else 0.0)
+    return sum(scores) / 2

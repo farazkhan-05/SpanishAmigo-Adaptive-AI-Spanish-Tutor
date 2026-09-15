@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from .baseline import baseline_configuration, validate_baseline_configuration
-from .loaders import DEFAULT_CASES_PATH, dataset_sha256, load_cases
-from .metrics import mean, recall_at_k, reciprocal_rank
+from .loaders import DEFAULT_CASES_PATH, PHASE5_CASES_PATH, dataset_sha256, load_cases, load_phase5_cases
+from .metrics import accuracy, binary_macro_f1, mean, recall_at_k, reciprocal_rank
 from .reporting import write_report
 
 
@@ -46,6 +46,59 @@ def retrieval_report(cases_path: Path, variant: str = "B_legacy") -> dict[str, A
     return _runtime_report("LOCAL/INTEGRATION RETRIEVAL EVAL", cases_path, {"variant": variant, "Recall@1": mean(recall_ones), "Recall@3": mean(recalls), "MRR": mean(ranks)}, failures, runtime_configuration())
 
 
+def planner_offline_report(cases_path: Path = PHASE5_CASES_PATH) -> dict[str, Any]:
+    """No model, network, or DB: run curated proposals through Phase-5 application policy."""
+    from app.schemas import AssessmentProposal
+    from app.services.adaptive import PolicyInput, assessability_gate, select_pedagogical_action, validate_assessment_proposal
+
+    cases = load_phase5_cases(cases_path)
+    expected_assessable, observed_assessable = [], []
+    expected_validation, observed_validation = [], []
+    expected_actions, observed_actions = [], []
+    false_accepts = 0
+    negative_validation_cases = 0
+    failures = []
+    for case in cases:
+        gate = assessability_gate(case.user_input, guardrail_blocked=case.guardrail_blocked)
+        validation = None
+        parsed_proposal = None
+        if case.proposal is not None:
+            try:
+                parsed_proposal = AssessmentProposal.model_validate(case.proposal)
+                validation = validate_assessment_proposal(parsed_proposal, learner_turn=case.user_input, gate=gate)
+            except Exception:
+                from app.services.adaptive import EvidenceValidation
+                validation = EvidenceValidation("invalid", "malformed_proposal", None, None)
+        action = select_pedagogical_action(PolicyInput(gate, validation, parsed_proposal.result if parsed_proposal else None, None, 0, validation.skill.assessment_mode if validation and validation.skill else None))
+        expected_assessable.append(case.expected_assessable)
+        observed_assessable.append(gate.assessable)
+        expected_actions.append(case.expected_action)
+        observed_actions.append(action.value)
+        if case.expected_validation_status is not None:
+            expected_validation.append(case.expected_validation_status)
+            observed_validation.append(validation.status if validation else None)
+            if case.expected_validation_status != "accepted":
+                negative_validation_cases += 1
+                false_accepts += int(validation is not None and validation.status == "accepted")
+        if gate.assessable != case.expected_assessable or action.value != case.expected_action or (case.expected_validation_status is not None and (validation is None or validation.status != case.expected_validation_status)):
+            failures.append({"case_id": case.id, "failure_category": "planner_mismatch"})
+    return {
+        "mode": "OFFLINE C_planner METRIC TEST", "status": "MEASURED",
+        "dataset_sha256": dataset_sha256(cases_path), "case_count": len(cases),
+        "baseline": baseline_configuration(),
+        "metrics": {
+            "assessability_accuracy": accuracy(expected_assessable, observed_assessable),
+            "assessability_macro_f1": binary_macro_f1(expected_assessable, observed_assessable),
+            "validation_accuracy": accuracy(expected_validation, observed_validation),
+            "policy_action_accuracy": accuracy(expected_actions, observed_actions),
+            "false_accepted_evidence_rate": false_accepts / negative_validation_cases if negative_validation_cases else None,
+            "skill_classification_accuracy": "NOT RUN (requires model predictions; fixture proposals are inputs)",
+            "mastery_update_metrics": "NOT IMPLEMENTED",
+        },
+        "failures": failures, "failure_count": len(failures),
+    }
+
+
 def live_report(cases_path: Path, baseline: str, limit: int | None) -> dict[str, Any]:
     from .adapters.live_model import evaluate_live_case, runtime_configuration  # Explicit only: invokes the configured Gemini generation model.
     cases = load_cases(cases_path)
@@ -69,7 +122,7 @@ def _runtime_report(mode: str, cases_path: Path, metrics: dict[str, Any], failur
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="SpanishAmigo pre-adaptive baseline evaluator")
-    parser.add_argument("mode", choices=("offline", "db-retrieval", "live-model"))
+    parser.add_argument("mode", choices=("offline", "planner-offline", "db-retrieval", "live-model"))
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES_PATH)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--baseline", choices=("A", "B"), default="B")
@@ -79,6 +132,9 @@ def main() -> None:
     args = parser.parse_args()
     if args.mode == "offline":
         report = offline_report(args.cases)
+    elif args.mode == "planner-offline":
+        planner_cases = args.cases if args.cases != DEFAULT_CASES_PATH else PHASE5_CASES_PATH
+        report = planner_offline_report(planner_cases)
     elif args.mode == "db-retrieval":
         report = retrieval_report(args.cases, args.variant)
     else:

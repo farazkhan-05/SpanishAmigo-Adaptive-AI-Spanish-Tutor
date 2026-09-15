@@ -20,7 +20,8 @@ from app.database import get_db
 from app.models import AssessmentEvent, ChatMessage, ChatSession, CompletedLesson, LearnerSkillState, PracticeAttempt, Skill, SystemStatus, User
 from app.curriculum_metadata import SKILLS
 from app.services.adaptive import create_assessment_event, create_practice_attempt, create_unknown_state
-from app.services.ai import save_memory_node
+from app.schemas import AssessmentProposal
+from app.services.ai import plan_turn, save_memory_node
 from app.services.auth import get_current_user
 from main import app
 
@@ -207,6 +208,90 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         self.assertEqual(item["status"], "not_assessed")
         self.assertEqual(item["accepted_evidence_count"], 0)
 
+    def test_adaptive_state_get_is_strictly_read_only(self):
+        self._seed_user("user-a")
+        self._set_current_user("user-a")
+        db = self.TestSessionLocal()
+        try:
+            before = (db.query(LearnerSkillState).count(), db.query(AssessmentEvent).count(), db.query(PracticeAttempt).count())
+        finally:
+            db.close()
+
+        self.assertEqual(self.client.get("/adaptive/state").status_code, 200)
+
+        db = self.TestSessionLocal()
+        try:
+            after = (db.query(LearnerSkillState).count(), db.query(AssessmentEvent).count(), db.query(PracticeAttempt).count())
+        finally:
+            db.close()
+        self.assertEqual(after, before)
+
+    @patch("app.services.ai.prepare_tutor_messages", return_value=[HumanMessage(content="planned")])
+    @patch("app.services.ai.guardrails_node", return_value={"guardrail_blocked": False, "guardrail_reason": "test"})
+    @patch("app.services.ai.propose_assessment")
+    def test_shared_planner_persists_idempotent_evidence_without_mastery_mutation(self, mock_propose, _mock_guardrail, _mock_prepare):
+        self._seed_user("user-a")
+        mock_propose.return_value = (AssessmentProposal.model_validate({
+            "assessable": True, "skill_id": "grammar.present-tense-querer",
+            "result": "correct", "error_type": None, "severity": None,
+            "confidence": 0.95, "evidence": "Yo quiero un caf\u00e9",
+            "correction": None, "misconception_id": None,
+            "assessment_version": "phase5-v1",
+        }), "configured-test-model")
+        state = {"messages": [HumanMessage(content="Yo quiero un caf\u00e9.")], "user_id": "user-a", "user_name": "Amigo", "completed_lessons_count": 0, "session_id": None, "adaptive_enabled": True}
+        db = self.TestSessionLocal()
+        try:
+            first = plan_turn(state, db)
+            second = plan_turn(state, db)
+            self.assertEqual(first.assessability, second.assessability)
+            self.assertEqual(first.validation.status, "accepted")
+            self.assertEqual(first.action, second.action)
+            self.assertEqual(first.assessment_event_id, second.assessment_event_id)
+            mock_propose.assert_called_once()
+            self.assertEqual(db.query(AssessmentEvent).filter_by(validation_status="accepted").count(), 1)
+            event = db.query(AssessmentEvent).one()
+            self.assertEqual(event.assessment_model_version, "configured-test-model")
+            self.assertEqual(event.validator_version, "phase5-validator-v1;schema=phase5-v1")
+            self.assertIsNone(db.query(LearnerSkillState).first())
+        finally:
+            db.close()
+
+    @patch("app.services.ai.prepare_tutor_messages", return_value=[HumanMessage(content="legacy fallback")])
+    @patch("app.services.ai.guardrails_node", return_value={"guardrail_blocked": False, "guardrail_reason": "test"})
+    @patch("app.services.ai.propose_assessment", side_effect=RuntimeError("provider down"))
+    def test_assessment_provider_failure_records_invalid_and_keeps_chat_plan(self, _mock_propose, _mock_guardrail, _mock_prepare):
+        self._seed_user("user-a")
+        state = {"messages": [HumanMessage(content="Yo quiero un caf\u00e9.")], "user_id": "user-a", "user_name": "Amigo", "completed_lessons_count": 0, "session_id": None, "adaptive_enabled": True}
+        db = self.TestSessionLocal()
+        try:
+            plan = plan_turn(state, db)
+            retry = plan_turn(state, db)
+            self.assertEqual(plan.validation.status, "invalid")
+            self.assertEqual(retry.validation.status, "invalid")
+            self.assertEqual(plan.tutor_messages[-1].content, "legacy fallback")
+            event = db.query(AssessmentEvent).one()
+            self.assertEqual(event.rejection_reason, "assessment_provider_failure")
+            self.assertIsNone(db.query(LearnerSkillState).first())
+            _mock_propose.assert_called_once()
+        finally:
+            db.close()
+
+    @patch("app.services.ai.prepare_tutor_messages", return_value=[HumanMessage(content="legacy")])
+    @patch("app.services.ai.guardrails_node", return_value={"guardrail_blocked": False, "guardrail_reason": "test"})
+    @patch("app.services.ai.propose_assessment")
+    def test_disabled_feature_gate_uses_legacy_without_assessment(self, mock_propose, _mock_guardrail, _mock_prepare):
+        self._seed_user("user-a")
+        state = {"messages": [HumanMessage(content="Yo quiero un caf\u00e9.")], "user_id": "user-a", "user_name": "Amigo", "completed_lessons_count": 0, "session_id": None, "adaptive_enabled": False}
+        db = self.TestSessionLocal()
+        try:
+            plan = plan_turn(state, db)
+            self.assertEqual(plan.retrieval_decision, "B_legacy")
+            self.assertEqual(plan.action.value, "NO_ADAPTIVE_ACTION")
+            self.assertEqual(db.query(AssessmentEvent).count(), 0)
+            mock_propose.assert_not_called()
+        finally:
+            db.close()
+
     def test_adaptive_state_rejects_invalid_skill_and_supports_anonymous_uid(self):
         self._set_current_user("anonymous-user", provider="anonymous")
         invalid = self.client.get("/adaptive/state?skill_id=not-a-skill")
@@ -369,6 +454,18 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         self.assertEqual(sessions_response.status_code, 200)
         remaining_ids = {session["id"] for session in sessions_response.json()}
         self.assertNotIn(created_session_id, remaining_ids)
+
+    @patch("app.routers.chat.update_session_title_in_background", return_value=None)
+    @patch("app.routers.chat.tutor_graph.invoke")
+    def test_send_preserves_theme_action_required_contract(self, mock_invoke, _mock_bg_title):
+        mock_invoke.return_value = {"messages": [AIMessage(content="", tool_calls=[{"name": "toggle_theme", "args": {}, "id": "theme-1", "type": "tool_call"}])]}
+        self._set_current_user("user-a")
+
+        response = self.client.post("/chat/send", json={"user_id": "user-a", "message": "dark mode", "session_id": None})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["action_required"], "TOGGLE_THEME")
+        self.assertIsInstance(response.json()["session_id"], int)
 
     @patch("app.routers.chat.generate_explanation", return_value="Short explanation")
     def test_explain_endpoint_valid_request_returns_200(self, _mock_explain):

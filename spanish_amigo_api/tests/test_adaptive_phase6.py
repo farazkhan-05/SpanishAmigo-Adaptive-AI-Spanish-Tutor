@@ -8,10 +8,10 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost:
 os.environ.setdefault("GEMINI_API_KEY", "test-key")
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from app.database import Base
-from app.models import User, Skill, LearnerSkillState, AssessmentEvent, PracticeAttempt, ReviewHistory, ReviewItem
+from app.models import User, Skill, LearnerSkillState, AssessmentEvent, PracticeAttempt, ReviewHistory, ReviewItem, ChatSession, ChatMessage
 from app.curriculum_metadata import SKILLS, TAXONOMY_VERSION
 from app.services.adaptive import (fsrs_rating_for_event, create_assessment_event, create_practice_attempt,
     process_accepted_evidence, review_rationale, update_mastery, start_due_review, assess_review_submission)
@@ -21,7 +21,12 @@ from app.schemas import AssessmentProposal
 class Phase6Tests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite:///:memory:")
-        for table in (User.__table__, Skill.__table__, LearnerSkillState.__table__, AssessmentEvent.__table__, ReviewItem.__table__, PracticeAttempt.__table__, ReviewHistory.__table__):
+        @event.listens_for(self.engine, "connect")
+        def _set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+        for table in (User.__table__, ChatSession.__table__, ChatMessage.__table__, Skill.__table__, LearnerSkillState.__table__, AssessmentEvent.__table__, ReviewItem.__table__, PracticeAttempt.__table__, ReviewHistory.__table__):
             table.create(bind=self.engine)
         self.db = sessionmaker(bind=self.engine)()
         self.db.add_all([User(id="a"), User(id="b")]); self.db.commit()
@@ -45,6 +50,18 @@ class Phase6Tests(unittest.TestCase):
             "severity": None, "confidence": .95, "evidence": "Tengo un boleto", "correction": None,
             "misconception_id": None, "assessment_version": "phase5-v1"}
         value.update(overrides); return AssessmentProposal.model_validate(value)
+
+    def test_first_accepted_evidence_creates_review_item_before_dependent_history_without_fk_violation(self):
+        event, attempt = self._event(user="a", result="correct", support="independent", independent=True)
+        # Ensure no pre-existing review item or history exists
+        self.assertIsNone(self.db.query(ReviewItem).filter_by(user_id="a", skill_id=event.skill_id).first())
+        self.assertEqual(self.db.query(ReviewHistory).filter_by(user_id="a").count(), 0)
+        state = process_accepted_evidence(self.db, verified_uid="a", event_id=event.id, practice_attempt_id=attempt.id)
+        self.assertIsNotNone(state.mastery_estimate)
+        item = self.db.query(ReviewItem).filter_by(user_id="a", skill_id=event.skill_id).one()
+        history = self.db.query(ReviewHistory).filter_by(user_id="a").one()
+        self.assertEqual(history.review_item_id, item.id)
+        self.assertEqual(history.assessment_event_id, event.id)
 
     def test_unknown_first_evidence_and_duplicate_are_safe(self):
         event, attempt = self._event()

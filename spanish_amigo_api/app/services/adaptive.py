@@ -216,6 +216,7 @@ def process_accepted_evidence(db: Session, *, verified_uid: str, event_id: str, 
     if item is None:
         item = ReviewItem(id=str(uuid4()), user_id=verified_uid, skill_id=event.skill_id, card_state=after.state.value, card_step=after.step, stability=after.stability, difficulty=after.difficulty, due_at=after.due.astimezone(UTC), last_review_at=after.last_review.astimezone(UTC) if after.last_review else None, fsrs_version=FSRS_LIBRARY_VERSION, scheduler_version=FSRS_SCHEDULER_VERSION, created_at=now, updated_at=now)
         db.add(item)
+        db.flush()
     else:
         item.card_state, item.card_step, item.stability, item.difficulty, item.due_at, item.last_review_at = after.state.value, after.step, after.stability, after.difficulty, after.due.astimezone(UTC), after.last_review.astimezone(UTC) if after.last_review else None
         item.updated_at = now

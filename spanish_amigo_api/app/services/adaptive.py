@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from fsrs import Card, Rating, Scheduler, State
 
 from app.curriculum_metadata import SKILLS, TAXONOMY_VERSION, SkillDefinition
-from app.models import AssessmentEvent, LearnerSkillState, PracticeAttempt, ReviewHistory, ReviewItem
+from app.models import AssessmentEvent, LearnerSkillState, PracticeAttempt, ReviewHistory, ReviewItem, User
 from app.schemas import AssessmentProposal
 
 AssessmentStatus = Literal["proposed", "accepted", "rejected", "ambiguous", "invalid", "low_confidence"]
@@ -154,7 +154,12 @@ def fsrs_rating_for_event(*, result: LearnerResult, support_level: str, independ
         return Rating.Again
     if result == "correct" and independent_recall and support_level == "independent":
         return Rating.Good
-    if result in {"correct", "partial"} and support_level in {"hinted", "guided"}:
+    # Partial recall is not a Good outcome even when the response did not use an
+    # explicit hint.  It is a valid concrete assessment result, so schedule it
+    # conservatively rather than letting the otherwise accepted submission abort.
+    if result == "partial" and support_level in {"independent", "hinted", "guided"}:
+        return Rating.Hard
+    if result == "correct" and support_level in {"hinted", "guided"}:
         return Rating.Hard
     raise ValueError("event does not have a defensible FSRS rating")
 
@@ -180,6 +185,12 @@ def process_accepted_evidence(db: Session, *, verified_uid: str, event_id: str, 
                               now: datetime | None = None) -> LearnerSkillState:
     """Single transactional authoritative event-to-state transition; retries return existing history."""
     now = (now or datetime.now(UTC)).astimezone(UTC)
+    # Serialize first-card/state creation for this tenant.  Row locks on only
+    # state/card rows cannot protect the initial transition because neither row
+    # exists yet; the verified owner row is always present through the event FK.
+    owner = db.scalar(select(User).where(User.id == verified_uid).with_for_update())
+    if owner is None:
+        raise ValueError("authenticated user not found")
     event = db.scalar(select(AssessmentEvent).where(AssessmentEvent.id == event_id, AssessmentEvent.user_id == verified_uid).with_for_update())
     if event is None: raise ValueError("event not found for authenticated user")
     if event.validation_status != "accepted" or event.skill_id is None or not mastery_eligibility(event.skill_id, event.evidence_modality):

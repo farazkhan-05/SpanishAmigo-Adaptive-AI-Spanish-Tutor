@@ -56,6 +56,7 @@ class Phase6Tests(unittest.TestCase):
     def test_rating_mapping_and_bounds(self):
         self.assertEqual(fsrs_rating_for_event(result="incorrect", support_level="independent", independent_recall=True).value, 1)
         self.assertEqual(fsrs_rating_for_event(result="correct", support_level="hinted", independent_recall=False).value, 2)
+        self.assertEqual(fsrs_rating_for_event(result="partial", support_level="independent", independent_recall=True).value, 2)
         self.assertEqual(fsrs_rating_for_event(result="correct", support_level="independent", independent_recall=True).value, 3)
         state = None
         for _ in range(30): state = update_mastery(previous=state.estimate if state else None, accepted_count=30, result="incorrect", support_level="independent", independent_recall=True, validation_confidence=.8)
@@ -103,6 +104,15 @@ class Phase6Tests(unittest.TestCase):
         result = assess_review_submission(self.db, verified_uid="a", review_id=review.id, attempt_id=attempt.id, learner_answer="Tengo un boleto")
         self.assertEqual(result.event.validation_status, "accepted"); self.assertEqual(self.db.query(ReviewHistory).one().rating, 1)
         self.assertLess(self.db.query(LearnerSkillState).one().mastery_estimate, .5)
+
+    @patch("app.services.ai.propose_assessment")
+    def test_partial_independent_review_is_hard_and_completes(self, propose):
+        review = self._review(); attempt = start_due_review(self.db, verified_uid="a", review_id=review.id)
+        propose.return_value = (self._proposal(result="partial"), "mock")
+        result = assess_review_submission(self.db, verified_uid="a", review_id=review.id, attempt_id=attempt.id, learner_answer="Tengo un boleto")
+        self.assertEqual(result.event.validation_status, "accepted")
+        self.assertEqual(self.db.query(ReviewHistory).one().rating, 2)
+        self.assertIsNotNone(self.db.query(LearnerSkillState).one().mastery_estimate)
 
     @patch("app.services.ai.propose_assessment")
     def test_review_validator_protects_invalid_skill_classes(self, propose):

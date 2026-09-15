@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     GEMINI_PRIMARY_MODEL: str = "gemini-3.1-flash-lite"
     GEMINI_BACKUP_MODEL: str = "gemma-4-31b"
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-2"
+    # Phase 5 observes and plans but never mutates mastery. Conservative rollout
+    # keeps legacy chat as the production default while allowing explicit evals.
+    ADAPTIVE_V2_PLANNER_ENABLED: bool = False
 
     # CORS / frontend integration
     ALLOWED_CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"

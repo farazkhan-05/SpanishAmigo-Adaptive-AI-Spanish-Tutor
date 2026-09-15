@@ -7,7 +7,8 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage
-from sqlalchemy import create_engine, delete
+from sqlalchemy import create_engine, delete, event
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost:5432/test")
@@ -16,8 +17,11 @@ os.environ.setdefault("GEMINI_API_KEY", "test-key")
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import get_db
-from app.models import ChatMessage, ChatSession, CompletedLesson, SystemStatus, User
-from app.services.ai import save_memory_node
+from app.models import AssessmentEvent, ChatMessage, ChatSession, CompletedLesson, LearnerSkillState, PracticeAttempt, ReviewHistory, ReviewItem, Skill, SystemStatus, User
+from app.curriculum_metadata import SKILLS
+from app.services.adaptive import create_assessment_event, create_practice_attempt, create_unknown_state
+from app.schemas import AssessmentProposal
+from app.services.ai import plan_turn, save_memory_node
 from app.services.auth import get_current_user
 from main import app
 
@@ -42,6 +46,9 @@ class TestBackendIntegrationFlows(unittest.TestCase):
             f"sqlite:///{cls.db_path}",
             connect_args={"check_same_thread": False},
         )
+        @event.listens_for(cls.engine, "connect")
+        def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+            dbapi_connection.execute("PRAGMA foreign_keys=ON")
         cls.TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=cls.engine)
 
         # Create only tables needed by these tests.
@@ -49,6 +56,12 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         CompletedLesson.__table__.create(bind=cls.engine, checkfirst=True)
         ChatSession.__table__.create(bind=cls.engine, checkfirst=True)
         ChatMessage.__table__.create(bind=cls.engine, checkfirst=True)
+        Skill.__table__.create(bind=cls.engine, checkfirst=True)
+        LearnerSkillState.__table__.create(bind=cls.engine, checkfirst=True)
+        AssessmentEvent.__table__.create(bind=cls.engine, checkfirst=True)
+        ReviewItem.__table__.create(bind=cls.engine, checkfirst=True)
+        PracticeAttempt.__table__.create(bind=cls.engine, checkfirst=True)
+        ReviewHistory.__table__.create(bind=cls.engine, checkfirst=True)
         SystemStatus.__table__.create(bind=cls.engine, checkfirst=True)
 
         def _override_db():
@@ -87,9 +100,16 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         try:
             db.execute(delete(ChatMessage))
             db.execute(delete(ChatSession))
+            db.execute(delete(ReviewHistory))
+            db.execute(delete(PracticeAttempt))
+            db.execute(delete(ReviewItem))
+            db.execute(delete(AssessmentEvent))
+            db.execute(delete(LearnerSkillState))
             db.execute(delete(CompletedLesson))
             db.execute(delete(SystemStatus))
+            db.execute(delete(Skill))
             db.execute(delete(User))
+            db.add_all([Skill(skill_id=s.skill_id, display_label=s.display_label, description=s.description, category=s.category, cefr_level=s.cefr_level, difficulty=s.difficulty, learning_objective=s.learning_objective, assessment_mode=s.assessment_mode, taxonomy_version="spanishamigo-v1") for s in SKILLS])
             db.commit()
         finally:
             db.close()
@@ -151,6 +171,195 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertIn("Cannot view another user's progress", response.json()["detail"])
 
+    def test_client_progress_user_id_cannot_override_verified_uid(self):
+        self._set_current_user("user-a")
+
+        response = self.client.post(
+            "/progress/complete",
+            json={"user_id": "user-b", "lesson_id": "1"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Cannot submit progress on behalf of another user", response.json()["detail"])
+
+    def test_anonymous_user_can_persist_the_current_progress_contract(self):
+        self._set_current_user("anonymous-user", provider="anonymous")
+
+        response = self.client.post(
+            "/progress/complete",
+            json={"user_id": "anonymous-user", "lesson_id": "1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["lesson_id"], "1")
+
+    def test_adaptive_state_is_authenticated_tenant_scoped_and_unknown(self):
+        self._seed_user("user-a")
+        self._seed_user("user-b")
+        db = self.TestSessionLocal()
+        try:
+            create_unknown_state(db, "user-b", "grammar.present-tense-tener")
+            db.commit()
+        finally:
+            db.close()
+        self._set_current_user("user-a")
+
+        response = self.client.get("/adaptive/state?skill_id=grammar.present-tense-tener")
+
+        self.assertEqual(response.status_code, 200)
+        item = response.json()[0]
+        self.assertIsNone(item["mastery_estimate"])
+        self.assertEqual(item["status"], "not_assessed")
+        self.assertEqual(item["accepted_evidence_count"], 0)
+
+    def test_adaptive_state_get_is_strictly_read_only(self):
+        self._seed_user("user-a")
+        self._set_current_user("user-a")
+        db = self.TestSessionLocal()
+        try:
+            before = (db.query(LearnerSkillState).count(), db.query(AssessmentEvent).count(), db.query(PracticeAttempt).count())
+        finally:
+            db.close()
+
+        self.assertEqual(self.client.get("/adaptive/state").status_code, 200)
+
+        db = self.TestSessionLocal()
+        try:
+            after = (db.query(LearnerSkillState).count(), db.query(AssessmentEvent).count(), db.query(PracticeAttempt).count())
+        finally:
+            db.close()
+        self.assertEqual(after, before)
+
+    @patch("app.services.ai.prepare_tutor_messages", return_value=[HumanMessage(content="planned")])
+    @patch("app.services.ai.guardrails_node", return_value={"guardrail_blocked": False, "guardrail_reason": "test"})
+    @patch("app.services.ai.propose_assessment")
+    def test_shared_planner_persists_idempotent_evidence_without_mastery_mutation(self, mock_propose, _mock_guardrail, _mock_prepare):
+        self._seed_user("user-a")
+        mock_propose.return_value = (AssessmentProposal.model_validate({
+            "assessable": True, "skill_id": "grammar.present-tense-querer",
+            "result": "correct", "error_type": None, "severity": None,
+            "confidence": 0.95, "evidence": "Yo quiero un caf\u00e9",
+            "correction": None, "misconception_id": None,
+            "assessment_version": "phase5-v1",
+        }), "configured-test-model")
+        state = {"messages": [HumanMessage(content="Yo quiero un caf\u00e9.")], "user_id": "user-a", "user_name": "Amigo", "completed_lessons_count": 0, "session_id": None, "adaptive_enabled": True}
+        db = self.TestSessionLocal()
+        try:
+            first = plan_turn(state, db)
+            second = plan_turn(state, db)
+            self.assertEqual(first.assessability, second.assessability)
+            self.assertEqual(first.validation.status, "accepted")
+            self.assertEqual(first.action, second.action)
+            self.assertEqual(first.assessment_event_id, second.assessment_event_id)
+            mock_propose.assert_called_once()
+            self.assertEqual(db.query(AssessmentEvent).filter_by(validation_status="accepted").count(), 1)
+            event = db.query(AssessmentEvent).one()
+            self.assertEqual(event.assessment_model_version, "configured-test-model")
+            self.assertEqual(event.validator_version, "phase5-validator-v1;schema=phase5-v1")
+            self.assertIsNone(db.query(LearnerSkillState).first())
+        finally:
+            db.close()
+
+    @patch("app.services.ai.prepare_tutor_messages", return_value=[HumanMessage(content="legacy fallback")])
+    @patch("app.services.ai.guardrails_node", return_value={"guardrail_blocked": False, "guardrail_reason": "test"})
+    @patch("app.services.ai.propose_assessment", side_effect=RuntimeError("provider down"))
+    def test_assessment_provider_failure_records_invalid_and_keeps_chat_plan(self, _mock_propose, _mock_guardrail, _mock_prepare):
+        self._seed_user("user-a")
+        state = {"messages": [HumanMessage(content="Yo quiero un caf\u00e9.")], "user_id": "user-a", "user_name": "Amigo", "completed_lessons_count": 0, "session_id": None, "adaptive_enabled": True}
+        db = self.TestSessionLocal()
+        try:
+            plan = plan_turn(state, db)
+            retry = plan_turn(state, db)
+            self.assertEqual(plan.validation.status, "invalid")
+            self.assertEqual(retry.validation.status, "invalid")
+            self.assertEqual(plan.tutor_messages[-1].content, "legacy fallback")
+            event = db.query(AssessmentEvent).one()
+            self.assertEqual(event.rejection_reason, "assessment_provider_failure")
+            self.assertIsNone(db.query(LearnerSkillState).first())
+            _mock_propose.assert_called_once()
+        finally:
+            db.close()
+
+    @patch("app.services.ai.prepare_tutor_messages", return_value=[HumanMessage(content="legacy")])
+    @patch("app.services.ai.guardrails_node", return_value={"guardrail_blocked": False, "guardrail_reason": "test"})
+    @patch("app.services.ai.propose_assessment")
+    def test_disabled_feature_gate_uses_legacy_without_assessment(self, mock_propose, _mock_guardrail, _mock_prepare):
+        self._seed_user("user-a")
+        state = {"messages": [HumanMessage(content="Yo quiero un caf\u00e9.")], "user_id": "user-a", "user_name": "Amigo", "completed_lessons_count": 0, "session_id": None, "adaptive_enabled": False}
+        db = self.TestSessionLocal()
+        try:
+            plan = plan_turn(state, db)
+            self.assertEqual(plan.retrieval_decision, "B_legacy")
+            self.assertEqual(plan.action.value, "NO_ADAPTIVE_ACTION")
+            self.assertEqual(db.query(AssessmentEvent).count(), 0)
+            mock_propose.assert_not_called()
+        finally:
+            db.close()
+
+    def test_adaptive_state_rejects_invalid_skill_and_supports_anonymous_uid(self):
+        self._set_current_user("anonymous-user", provider="anonymous")
+        invalid = self.client.get("/adaptive/state?skill_id=not-a-skill")
+        response = self.client.get("/adaptive/state?skill_id=pronunciation.silent-h")
+        self.assertEqual(invalid.status_code, 422)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()[0]["assessment_mode"], "speech_required")
+
+    def test_adaptive_storage_idempotency_and_contextual_guardrail(self):
+        self._seed_user("user-a")
+        db = self.TestSessionLocal()
+        try:
+            first = create_assessment_event(db, verified_uid="user-a", skill_id="grammar.present-tense-tener", source_type="chat_message", evidence_snapshot="Tengo un boleto.", proposed_result="correct", source_event_key="trusted-message-1")
+            same = create_assessment_event(db, verified_uid="user-a", skill_id="grammar.present-tense-tener", source_type="chat_message", evidence_snapshot="ignored duplicate", proposed_result="correct", source_event_key="trusted-message-1")
+            attempt = create_practice_attempt(db, verified_uid="user-a", skill_id="grammar.present-tense-tener", exercise_type="recall", source_event_key="trusted-attempt-1", learner_response_snapshot="Tengo un boleto.")
+            duplicate_attempt = create_practice_attempt(db, verified_uid="user-a", skill_id="grammar.present-tense-tener", exercise_type="recall", source_event_key="trusted-attempt-1")
+            self.assertEqual(first.id, same.id)
+            self.assertEqual(attempt.id, duplicate_attempt.id)
+            with self.assertRaises(ValueError):
+                create_unknown_state(db, "user-a", "communication.cafe-ordering")
+            db.commit()
+            self.assertEqual(db.query(AssessmentEvent).count(), 1)
+            self.assertEqual(db.query(PracticeAttempt).count(), 1)
+            self.assertIsNone(db.query(LearnerSkillState).first())
+        finally:
+            db.close()
+
+    def test_adaptive_constraints_and_assessment_mode_foundation(self):
+        self._seed_user("user-a")
+        db = self.TestSessionLocal()
+        try:
+            db.add(LearnerSkillState(user_id="user-a", skill_id="grammar.present-tense-tener", mastery_estimate=1.1))
+            with self.assertRaises(IntegrityError):
+                db.flush()
+            db.rollback()
+            with self.assertRaises(ValueError):
+                create_assessment_event(db, verified_uid="user-a", skill_id="grammar.present-tense-tener", source_type="chat_message", evidence_snapshot="", proposed_result="unknown", validation_status="accepted")
+            from app.services.adaptive import mastery_eligibility
+            self.assertTrue(mastery_eligibility("grammar.present-tense-tener", "text"))
+            self.assertFalse(mastery_eligibility("pronunciation.silent-h", "text"))
+            # A vocabulary event stays an event: it creates no whole-domain state row.
+            create_assessment_event(db, verified_uid="user-a", skill_id="vocabulary.dining-basics", source_type="chat_message", evidence_snapshot="agua", proposed_result="correct")
+            db.commit()
+            self.assertIsNone(db.query(LearnerSkillState).filter_by(skill_id="vocabulary.dining-basics").first())
+        finally:
+            db.close()
+
+    def test_chat_deletion_keeps_evidence_snapshot_and_nulls_provenance(self):
+        session_id = self._seed_session_with_messages("user-a")
+        db = self.TestSessionLocal()
+        try:
+            message = db.query(ChatMessage).filter_by(session_id=session_id, role="user").first()
+            assessment = create_assessment_event(db, verified_uid="user-a", skill_id="grammar.present-tense-tener", source_type="chat_message", evidence_snapshot="Tengo un boleto.", proposed_result="correct", chat_session_id=session_id, chat_message_id=message.id)
+            assessment_id = assessment.id
+            db.commit()
+            db.delete(db.get(ChatSession, session_id))
+            db.commit()
+            retained = db.get(AssessmentEvent, assessment_id)
+            self.assertEqual(retained.evidence_snapshot, "Tengo un boleto.")
+            self.assertIsNone(retained.chat_session_id)
+            self.assertIsNone(retained.chat_message_id)
+        finally:
+            db.close()
+
     def test_tenancy_user_a_cannot_access_user_b_chat_history(self):
         session_id = self._seed_session_with_messages("user-b")
         self._set_current_user("user-a")
@@ -177,6 +386,37 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         self.assertIn("Cannot modify another user's session", rename_response.json()["detail"])
         self.assertEqual(delete_response.status_code, 403)
         self.assertIn("Cannot delete another user's session", delete_response.json()["detail"])
+
+    def test_session_list_only_returns_verified_users_sessions(self):
+        user_a_session = self._seed_session_with_messages("user-a", "User A")
+        self._seed_session_with_messages("user-b", "User B")
+        self._set_current_user("user-a")
+
+        response = self.client.get("/chat/sessions")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([session["id"] for session in response.json()], [user_a_session])
+
+    @patch("app.routers.chat.update_session_title_in_background", return_value=None)
+    @patch("app.routers.chat.tutor_graph.invoke")
+    def test_send_rejects_another_users_session_and_client_uid(self, mock_invoke, _mock_bg_title):
+        mock_invoke.side_effect = self._fake_tutor_invoke
+        session_id = self._seed_session_with_messages("user-b")
+        self._set_current_user("user-a")
+
+        mismatched_uid = self.client.post(
+            "/chat/send",
+            json={"user_id": "user-b", "message": "Hola", "session_id": None},
+        )
+        foreign_session = self.client.post(
+            "/chat/send",
+            json={"user_id": "user-a", "message": "Hola", "session_id": session_id},
+        )
+
+        self.assertEqual(mismatched_uid.status_code, 403)
+        self.assertEqual(foreign_session.status_code, 403)
+        self.assertIn("Invalid session ID", foreign_session.json()["detail"])
+        mock_invoke.assert_not_called()
 
     @patch("app.routers.chat.update_session_title_in_background", return_value=None)
     @patch("app.routers.chat.tutor_graph.invoke")
@@ -218,6 +458,18 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         self.assertEqual(sessions_response.status_code, 200)
         remaining_ids = {session["id"] for session in sessions_response.json()}
         self.assertNotIn(created_session_id, remaining_ids)
+
+    @patch("app.routers.chat.update_session_title_in_background", return_value=None)
+    @patch("app.routers.chat.tutor_graph.invoke")
+    def test_send_preserves_theme_action_required_contract(self, mock_invoke, _mock_bg_title):
+        mock_invoke.return_value = {"messages": [AIMessage(content="", tool_calls=[{"name": "toggle_theme", "args": {}, "id": "theme-1", "type": "tool_call"}])]}
+        self._set_current_user("user-a")
+
+        response = self.client.post("/chat/send", json={"user_id": "user-a", "message": "dark mode", "session_id": None})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["action_required"], "TOGGLE_THEME")
+        self.assertIsInstance(response.json()["session_id"], int)
 
     @patch("app.routers.chat.generate_explanation", return_value="Short explanation")
     def test_explain_endpoint_valid_request_returns_200(self, _mock_explain):
@@ -309,6 +561,37 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         self.assertIn('"token": "Hola"', body)
         self.assertIn('"token": " amigo"', body)
         self.assertIn("[DONE]", body)
+
+    @patch("app.routers.chat.update_session_title_in_background", return_value=None)
+    @patch("app.services.ai.save_memory_node", return_value={})
+    @patch("app.services.ai.prepare_tutor_messages", return_value=[HumanMessage(content="hola")])
+    @patch("app.services.ai.guardrails_node", return_value={"guardrail_blocked": False})
+    @patch("app.routers.chat.astream_with_fallback")
+    def test_stream_endpoint_preserves_theme_action_frame(
+        self,
+        mock_astream,
+        _mock_guardrails,
+        _mock_prepare,
+        _mock_save_memory,
+        _mock_bg_title,
+    ):
+        async def _fake_stream(*_args, **_kwargs):
+            class Chunk:
+                content = ""
+                tool_calls = [{"name": "toggle_theme"}]
+
+            yield Chunk()
+
+        mock_astream.side_effect = _fake_stream
+
+        response = self.client.post(
+            "/chat/send_stream",
+            json={"user_id": "user-a", "message": "dark mode", "session_id": None},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"action_required": "TOGGLE_THEME"', response.text)
+        self.assertIn("[DONE]", response.text)
 
     @patch("app.routers.chat.update_session_title_in_background", return_value=None)
     @patch("app.services.ai.save_memory_node", return_value={})

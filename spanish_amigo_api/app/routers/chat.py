@@ -6,14 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from typing import List
+from typing import List, cast
 
 from app.database import get_db, SessionLocal
 from app.models import ChatMessage, CompletedLesson, ChatSession, SystemStatus, User
 from app.schemas import ChatRequest, ChatResponse, ExplainRequest, ExplainResponse, SessionResponse, SessionUpdate
-from app.services.ai import tutor_graph, generate_explanation, extract_text_content, generate_chat_title, astream_with_fallback
+from app.services.ai import TutorState, tutor_graph, generate_explanation, extract_text_content, generate_chat_title, astream_with_fallback, plan_turn
 from app.services.auth import get_current_user
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
 logger = logging.getLogger("spanish-amigo-ai")
 
@@ -26,23 +26,21 @@ ANONYMOUS_GLOBAL_CHAT_MESSAGE_LIMIT = 3
 MAX_HISTORY_CHARS = 4000
 
 
-def _prepare_tutor_messages_with_fresh_db(state_input: dict):
-    from app.services.ai import prepare_tutor_messages
-
+def _plan_turn_with_fresh_db(state_input: dict):
     with SessionLocal() as background_db:
-        return prepare_tutor_messages(state_input, background_db)
+        return plan_turn(cast(TutorState, state_input), background_db)
 
 
 def _save_memory_with_fresh_db(state_input: dict) -> None:
     from app.services.ai import save_memory_node
 
     with SessionLocal() as background_db:
-        save_memory_node(state_input, db=background_db)
+        save_memory_node(cast(TutorState, state_input), db=background_db)
         background_db.commit()
 
 
 def _build_history_messages_with_budget(db_history) -> list:
-    history_messages = []
+    history_messages: list[BaseMessage] = []
     current_chars = 0
 
     for msg in db_history:
@@ -373,17 +371,17 @@ def send_chat_message_stream(
     }
 
     async def sse_generator():
-        from app.services.ai import guardrails_node
         try:
             # 1. Yield active session ID immediately so client can bind new conversations instantly
             yield f"data: {json.dumps({'session_id': active_session_id})}\n\n"
 
-            # 2. Run guardrails off the event loop; long inputs may call the classifier.
-            guardrail_res = await asyncio.to_thread(guardrails_node, state_input)
+            # 2. Complete the same authoritative deterministic/adaptive plan used by
+            # /send before response delivery begins.
+            turn_plan = await asyncio.to_thread(_plan_turn_with_fresh_db, state_input)
 
-            if guardrail_res.get("guardrail_blocked", False):
+            if turn_plan.guardrail_blocked:
                 # Guardrails blocked: stream the off-topic reply word-by-word for premium feel
-                reply_text = guardrail_res["messages"][-1].content
+                reply_text = turn_plan.tutor_messages[-1].content
                 words = reply_text.split()
                 for i, w in enumerate(words):
                     space = " " if i > 0 else ""
@@ -396,10 +394,9 @@ def send_chat_message_stream(
                 yield "data: [DONE]\n\n"
                 return
 
-            # 3. Guardrails passed: run heavy RAG + DB lookup in a background thread
-            #    asyncio.to_thread delegates the blocking work to a worker thread so
-            #    the ASGI event loop stays completely free while embeddings are computed.
-            tutor_messages = await asyncio.to_thread(_prepare_tutor_messages_with_fresh_db, state_input)
+            # 3. Retrieval and grounded tutor-context preparation already happened
+            # inside the shared planner.
+            tutor_messages = turn_plan.tutor_messages
 
             # 4. Stream response using async generator — zero event-loop blocking
             full_reply_text = ""

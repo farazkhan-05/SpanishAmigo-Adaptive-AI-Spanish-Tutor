@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
-from typing import Optional, List
+from typing import Literal, Optional, List
 
 class UserCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -71,3 +71,55 @@ class ExplainResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     
     explanation: str = Field(..., min_length=1)
+
+
+class AdaptiveStateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    skill_id: str = Field(..., min_length=1, max_length=100)
+    display_name: str = Field(..., min_length=1, max_length=160)
+    assessment_mode: str = Field(..., pattern="^(text|speech_required|contextual)$")
+    mastery_estimate: Optional[float] = Field(None, ge=0, le=1)
+    estimate_confidence: Optional[float] = Field(None, ge=0, le=1)
+    accepted_evidence_count: int = Field(..., ge=0)
+    last_practiced_at: Optional[datetime] = None
+    status: str = Field(..., pattern="^(not_assessed|evidence_insufficient|assessed)$")
+
+
+class ReviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    review_id: str
+    skill_id: str
+    display_name: str
+    due_at: datetime
+    rationale: str
+
+
+class ReviewSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attempt_id: str = Field(..., min_length=1, max_length=36)
+    learner_answer: str = Field(..., min_length=1, max_length=2000)
+
+
+class ReviewStartResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attempt_id: str
+    exercise_id: str
+    exercise_text: str
+
+
+class AssessmentProposal(BaseModel):
+    """Strict, reasoning-free model proposal. Application validation is authoritative."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    assessable: bool
+    skill_id: str = Field(..., min_length=1, max_length=100)
+    result: Literal["correct", "incorrect", "partial", "unknown", "not_applicable"]
+    error_type: Optional[Literal["grammar", "vocabulary", "word_order", "agreement", "other"]] = None
+    severity: Optional[Literal[1, 2, 3]] = None
+    confidence: float = Field(..., ge=0, le=1)
+    evidence: str = Field(..., min_length=1, max_length=2000)
+    correction: Optional[str] = Field(None, max_length=2000)
+    misconception_id: Optional[str] = Field(None, max_length=100)
+    assessment_version: Literal["phase5-v1"]

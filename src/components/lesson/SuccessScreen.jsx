@@ -44,9 +44,9 @@ const SuccessScreen = ({ onBackToMap }) => {
   }, []);
 
   return (
-    <Box 
-      sx={{ 
-        position: 'fixed', 
+    <Box
+      sx={{
+        position: 'fixed',
         top: 0,
         left: 0,
         right: 0,
@@ -62,10 +62,10 @@ const SuccessScreen = ({ onBackToMap }) => {
       }}
     >
       {/* Confetti */}
-      <Confetti 
-        width={windowSize.width} 
-        height={windowSize.height} 
-        recycle={false} 
+      <Confetti
+        width={windowSize.width}
+        height={windowSize.height}
+        recycle={false}
         numberOfPieces={400}
         gravity={0.2}
         colors={['#FF6B6B', '#4ECDC4', '#A78BFA', '#1A1A1A', '#FFFFFF']}
@@ -73,8 +73,8 @@ const SuccessScreen = ({ onBackToMap }) => {
 
       <Container maxWidth="sm">
         {/* Trophy */}
-        <Box 
-          sx={{ 
+        <Box
+          sx={{
             mb: 3,
             display: 'inline-flex',
             alignItems: 'center',
@@ -99,9 +99,9 @@ const SuccessScreen = ({ onBackToMap }) => {
         </Box>
 
         {/* Title */}
-        <Typography 
-          variant="h3" 
-          sx={{ 
+        <Typography
+          variant="h3"
+          sx={{
             fontWeight: 900,
             mb: 1,
             color: '#1A1A1A',
@@ -110,10 +110,10 @@ const SuccessScreen = ({ onBackToMap }) => {
         >
           Leccion Completada!
         </Typography>
-        
-        <Typography 
-          variant="body1" 
-          sx={{ 
+
+        <Typography
+          variant="body1"
+          sx={{
             mb: 3,
             color: '#1A1A1A',
             fontWeight: 700,
@@ -155,9 +155,9 @@ const SuccessScreen = ({ onBackToMap }) => {
             </Box>
           </Box>
 
-          <Typography 
-            variant="h3" 
-            sx={{ 
+          <Typography
+            variant="h3"
+            sx={{
               fontWeight: 900,
               color: '#FF6B6B',
               mb: 0.5,
@@ -219,7 +219,7 @@ const SuccessScreen = ({ onBackToMap }) => {
         )}
 
         {/* Back Button */}
-        <Button 
+        <Button
           variant="contained"
           size="large"
           onClick={onBackToMap}

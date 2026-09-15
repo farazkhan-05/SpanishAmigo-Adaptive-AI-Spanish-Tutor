@@ -1,0 +1,9 @@
+# Adaptive V2 Phase 8: learner-facing adaptive UX
+
+Phase 8 extends the existing CourseMap with a responsive **My Spanish** section beneath the established course journey and support panels. Course completion remains in `CourseJourney`; the adaptive section separately reads authenticated learner evidence and server-scheduled reviews.
+
+`src/api/adaptive.js` centralizes authenticated calls to `GET /adaptive/state`, `GET /adaptive/reviews/due`, `GET /adaptive/reviews/next`, `POST /adaptive/reviews/{review_id}/start`, and `POST /adaptive/reviews/{review_id}/submit`. It sends only `attempt_id` and `learner_answer` for submission. No learner state, exercise, result, rating, mastery, or schedule is authored or persisted by the browser.
+
+The UI uses backend modes directly: unknown numeric state reads “Not assessed yet”; speech-required skills do not show a text mastery claim; contextual skills read as practice contexts rather than atomic scores; vocabulary domains state that one word cannot establish the domain. Where present, mastery estimate and evidence strength are separate values. Due reviews show their server-provided rationale in an expandable “Why this exercise?” area.
+
+Starting a review obtains the opaque server-issued attempt and exercise. Submission disables while in flight, presents the returned validation status and server-recorded outcome, and refreshes state, due reviews, and next review only after the server response. The response now adds that stored outcome (`result`) so the UI can accurately distinguish an accepted correct from an accepted incorrect submission; it does not alter any algorithm or accept a client result. Loading, empty, retryable error, unavailable, and no-review states are explicit. Anonymous Firebase users use the same authenticated API path and remain tenant-scoped by their Firebase token.

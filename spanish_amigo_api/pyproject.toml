@@ -8,6 +8,7 @@ dependencies = [
     "alembic>=1.18.4",
     "fastapi>=0.136.1",
     "firebase-admin>=7.4.0",
+    "fsrs==6.3.2",
     "langchain-google-genai>=4.2.2",
     "langgraph>=1.2.0",
     "pgvector>=0.4.2",

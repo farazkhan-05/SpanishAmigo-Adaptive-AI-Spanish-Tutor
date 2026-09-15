@@ -1,0 +1,68 @@
+{"id":"p7-assess-01","category":"assessability","scenario":"gate","expected":{"input":"Yo tengo un boleto.","assessable":true},"notes":"Independent Spanish answer."}
+{"id":"p7-assess-02","category":"assessability","scenario":"gate","expected":{"input":"Mi respuesta: tengo agua.","assessable":true},"notes":"Exercise answer marker."}
+{"id":"p7-assess-03","category":"assessability","scenario":"gate","expected":{"input":"Perdón, yo quiero agua.","assessable":true},"notes":"Self-correction."}
+{"id":"p7-assess-04","category":"assessability","scenario":"gate","expected":{"input":"Explain tener.","assessable":false},"notes":"Explanation request."}
+{"id":"p7-assess-05","category":"assessability","scenario":"gate","expected":{"input":"Translate I need water.","assessable":false},"notes":"Translation request."}
+{"id":"p7-assess-06","category":"assessability","scenario":"gate","expected":{"input":"Hola","assessable":false},"notes":"Tutor greeting."}
+{"id":"p7-assess-07","category":"assessability","scenario":"gate","expected":{"input":"Toggle dark theme","assessable":false},"notes":"UI command."}
+{"id":"p7-assess-08","category":"assessability","scenario":"gate","expected":{"input":"Which stocks should I buy?","assessable":false,"blocked":true},"notes":"Off-topic blocked input."}
+{"id":"p7-assess-09","category":"assessability","scenario":"gate","expected":{"input":"Como?","assessable":false},"notes":"Ambiguous minimal production is not atomic evidence."}
+{"id":"p7-skill-01","category":"skill_assessment","scenario":"accepted","expected":{"input":"Yo quiero agua.","skill":"grammar.present-tense-querer","result":"correct","evidence":"Yo quiero agua","status":"accepted"},"notes":"Correct atomic grammar evidence."}
+{"id":"p7-skill-02","category":"skill_assessment","scenario":"accepted","expected":{"input":"Yo quiere agua.","skill":"grammar.present-tense-querer","result":"incorrect","evidence":"Yo quiere agua","status":"accepted"},"notes":"Incorrect evidence."}
+{"id":"p7-skill-03","category":"skill_assessment","scenario":"accepted","expected":{"input":"Mi respuesta: quiero agua.","skill":"grammar.present-tense-querer","result":"partial","evidence":"quiero agua","status":"accepted"},"notes":"Partial evidence."}
+{"id":"p7-skill-04","category":"skill_assessment","scenario":"unknown_skill","expected":{"status":"invalid"},"notes":"Wrong skill proposal."}
+{"id":"p7-skill-05","category":"skill_assessment","scenario":"malformed","expected":{"status":"invalid"},"notes":"Malformed proposal."}
+{"id":"p7-skill-06","category":"skill_assessment","scenario":"invented","expected":{"status":"invalid"},"notes":"Unsupported evidence."}
+{"id":"p7-skill-07","category":"skill_assessment","scenario":"invented","expected":{"status":"invalid"},"notes":"Invented evidence cannot be accepted."}
+{"id":"p7-skill-08","category":"skill_assessment","scenario":"accent","expected":{"status":"invalid"},"notes":"Accent-sensitive evidence."}
+{"id":"p7-skill-09","category":"skill_assessment","scenario":"negation","expected":{"status":"invalid"},"notes":"Negation-sensitive evidence."}
+{"id":"p7-mode-01","category":"assessment_mode","scenario":"accepted","expected":{"input":"Yo tengo agua.","skill":"grammar.present-tense-tener","result":"correct","evidence":"Yo tengo agua","status":"accepted"},"notes":"Normal text skill."}
+{"id":"p7-mode-02","category":"assessment_mode","scenario":"contextual","expected":{"status":"rejected"},"notes":"Contextual skill cannot mutate atomic mastery."}
+{"id":"p7-mode-03","category":"assessment_mode","scenario":"speech","expected":{"status":"rejected"},"notes":"Speech-required skill via text."}
+{"id":"p7-mode-04","category":"assessment_mode","scenario":"vocabulary","expected":{"status":"rejected"},"notes":"Broad vocabulary-domain overclaim."}
+{"id":"p7-policy-01","category":"policy","scenario":"policy_question","expected":{"action":"ANSWER_NORMALLY"},"notes":"Explicit question wins."}
+{"id":"p7-policy-02","category":"policy","scenario":"policy_incorrect","expected":{"action":"EXPLAIN_AND_GUIDE"},"notes":"Validated mistake."}
+{"id":"p7-policy-03","category":"policy","scenario":"policy_unknown","expected":{"action":"COLLECT_MORE_EVIDENCE"},"notes":"Unknown mastery."}
+{"id":"p7-policy-04","category":"policy","scenario":"policy_existing","expected":{"action":"TARGETED_PRACTICE"},"notes":"Existing developing mastery."}
+{"id":"p7-policy-05","category":"policy","scenario":"policy_insufficient","expected":{"action":"COLLECT_MORE_EVIDENCE"},"notes":"Insufficient evidence."}
+{"id":"p7-policy-06","category":"policy","scenario":"policy_contextual","expected":{"action":"CONTEXTUAL_TRANSFER"},"notes":"Contextual transfer."}
+{"id":"p7-mastery-01","category":"mastery","scenario":"state_correct","expected":{"mutates":true},"notes":"First accepted evidence."}
+{"id":"p7-mastery-02","category":"mastery","scenario":"state_repeat","expected":{"mutates":true},"notes":"Repeated correct evidence."}
+{"id":"p7-mastery-03","category":"mastery","scenario":"state_incorrect","expected":{"mutates":true},"notes":"Incorrect evidence updates legitimately."}
+{"id":"p7-mastery-04","category":"mastery","scenario":"state_assisted","expected":{"mutates":true},"notes":"Assisted correct evidence."}
+{"id":"p7-mastery-05","category":"mastery","scenario":"state_partial","expected":{"mutates":true},"notes":"Partial answer evidence."}
+{"id":"p7-mastery-06","category":"mastery","scenario":"state_duplicate","expected":{"mutates":false},"notes":"Duplicate event must not mutate twice."}
+{"id":"p7-mastery-07","category":"mastery","scenario":"state_rejected","expected":{"mutates":false},"notes":"Rejected event."}
+{"id":"p7-mastery-08","category":"mastery","scenario":"state_bounds","expected":{"bounds":true},"notes":"Mastery is bounded."}
+{"id":"p7-mastery-09","category":"mastery","scenario":"state_bounds","expected":{"bounds":true},"notes":"Confidence is bounded."}
+{"id":"p7-review-01","category":"reviews","scenario":"review_due","expected":{"allowed":true},"notes":"Due review may start."}
+{"id":"p7-review-02","category":"reviews","scenario":"review_not_due","expected":{"allowed":false},"notes":"Not-due review cannot start."}
+{"id":"p7-review-03","category":"reviews","scenario":"rating_again","expected":{"rating":1},"notes":"Again mapping."}
+{"id":"p7-review-04","category":"reviews","scenario":"rating_hard","expected":{"rating":2},"notes":"Hard mapping."}
+{"id":"p7-review-05","category":"reviews","scenario":"rating_good","expected":{"rating":3},"notes":"Good mapping."}
+{"id":"p7-review-06","category":"reviews","scenario":"state_duplicate","expected":{"mutates":false},"notes":"Duplicate submission."}
+{"id":"p7-review-07","category":"reviews","scenario":"review_start_no_mutation","expected":{"mutates":false},"notes":"Review start without mutation."}
+{"id":"p7-review-08","category":"reviews","scenario":"state_correct","expected":{"mutates":true},"notes":"Successful review mutation."}
+{"id":"p7-review-09","category":"reviews","scenario":"state_rejected","expected":{"mutates":false},"notes":"Rejected review without mutation."}
+{"id":"p7-review-10","category":"reviews","scenario":"rationale","expected":{"accurate":true},"notes":"Rationale derives from stored facts."}
+{"id":"p7-tenant-01","category":"tenancy","scenario":"foreign_state","expected":{"authorized":false},"notes":"Foreign state."}
+{"id":"p7-tenant-02","category":"tenancy","scenario":"foreign_event","expected":{"authorized":false},"notes":"Foreign event."}
+{"id":"p7-tenant-03","category":"tenancy","scenario":"foreign_attempt","expected":{"authorized":false},"notes":"Foreign practice attempt."}
+{"id":"p7-tenant-04","category":"tenancy","scenario":"foreign_review","expected":{"authorized":false},"notes":"Foreign review."}
+{"id":"p7-tenant-05","category":"tenancy","scenario":"guessed_id","expected":{"authorized":false},"notes":"Guessed ID."}
+{"id":"p7-retrieval-01","category":"retrieval","scenario":"fixture_retrieval","expected":{"kind":"semantic_paraphrase"},"notes":"Semantic paraphrase fixture; not a DB measurement."}
+{"id":"p7-retrieval-02","category":"retrieval","scenario":"fixture_retrieval","expected":{"kind":"lexical_match"},"notes":"Lexical match fixture; not a DB measurement."}
+{"id":"p7-retrieval-03","category":"retrieval","scenario":"fixture_retrieval","expected":{"kind":"lesson_distractor"},"notes":"Lesson distractor fixture."}
+{"id":"p7-retrieval-04","category":"retrieval","scenario":"fixture_retrieval","expected":{"kind":"wrong_cefr"},"notes":"CEFR metadata filtering fixture."}
+{"id":"p7-retrieval-05","category":"retrieval","scenario":"fixture_retrieval","expected":{"kind":"metadata_filtering"},"notes":"Metadata filtering fixture."}
+{"id":"p7-retrieval-06","category":"retrieval","scenario":"fixture_retrieval","expected":{"kind":"hybrid_candidate_fusion"},"notes":"Hybrid fusion fixture only."}
+{"id":"p7-safety-01","category":"safety","scenario":"injection","expected":{"safe":true},"notes":"User prompt injection."}
+{"id":"p7-safety-02","category":"safety","scenario":"injection","expected":{"safe":true},"notes":"Curriculum/retrieval instruction injection."}
+{"id":"p7-safety-03","category":"safety","scenario":"state_rejected","expected":{"mutates":false},"notes":"Client cannot force mastery value."}
+{"id":"p7-safety-04","category":"safety","scenario":"rating_client","expected":{"safe":true},"notes":"Client cannot force FSRS rating."}
+{"id":"p7-safety-05","category":"safety","scenario":"injection","expected":{"safe":true},"notes":"Secrets/system prompt request blocked before assessment."}
+{"id":"p7-failure-01","category":"failure","scenario":"provider_failure","expected":{"status":"invalid"},"notes":"Assessment provider failure safe fallback."}
+{"id":"p7-failure-02","category":"failure","scenario":"malformed","expected":{"status":"invalid"},"notes":"Malformed structured output."}
+{"id":"p7-failure-03","category":"failure","scenario":"retrieval_failure","expected":{"safe":true},"notes":"Retrieval failure degrades safely."}
+{"id":"p7-failure-04","category":"failure","scenario":"generation_fallback","expected":{"safe":true},"notes":"Generation fallback is not state mutation."}
+{"id":"p7-failure-05","category":"failure","scenario":"state_duplicate","expected":{"mutates":false},"notes":"Interrupted/retried request is idempotent."}

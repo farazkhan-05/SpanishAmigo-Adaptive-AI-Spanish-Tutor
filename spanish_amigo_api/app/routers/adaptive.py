@@ -91,4 +91,6 @@ def submit_review(review_id: str, payload: ReviewSubmission, db: Session = Depen
         db.rollback()
         raise HTTPException(status_code=404 if "not found" in str(error) else 409, detail=str(error))
     return {"attempt_id": payload.attempt_id, "event_id": result.event.id, "status": result.event.validation_status,
+            # This is the validated outcome stored by the server, not a client-supplied rating.
+            "result": result.event.proposed_result,
             "mastery_updated": result.event.validation_status == "accepted"}

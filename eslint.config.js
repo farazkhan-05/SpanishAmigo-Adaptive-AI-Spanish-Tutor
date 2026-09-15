@@ -11,6 +11,7 @@ export default defineConfig([
     'local_backend_docs/**',
     'parse_lessons.js',
     'lessons_data.json',
+    'spanish_amigo_api/**',
   ]),
   {
     files: ['**/*.{js,jsx}'],

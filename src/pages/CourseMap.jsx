@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 
 import CourseJourney from '../components/course/CourseJourney';
 import { ContinueLearningPanel, CourseSummaryPanel } from '../components/course/CourseSupportPanels';
+import MySpanishPanel from '../components/course/MySpanishPanel';
 import { courseData } from '../data/curriculum';
 import { useAuth } from '../context/AuthContext';
 import { useProgress } from '../context/ProgressContext';
@@ -104,10 +105,10 @@ const CourseMap = () => {
             xl: '250px minmax(0, 1fr) 250px',
           },
           gridTemplateAreas: {
-            xs: '"journey" "continue" "summary"',
-            sm: '"journey journey" "continue summary"',
-            md: '"journey summary" "continue summary"',
-            lg: '"continue journey summary"',
+            xs: '"journey" "continue" "summary" "adaptive"',
+            sm: '"journey journey" "continue summary" "adaptive adaptive"',
+            md: '"journey summary" "continue summary" "adaptive adaptive"',
+            lg: '"continue journey summary" "adaptive adaptive adaptive"',
           },
           alignItems: 'start',
           gap: { xs: 2.5, sm: 3, lg: 3.5 },
@@ -135,6 +136,10 @@ const CourseMap = () => {
             remainingCount={remainingLessons}
             totalCount={courseData.length}
           />
+        </Box>
+
+        <Box sx={{ gridArea: 'adaptive', minWidth: 0, mt: { xs: .5, lg: 1 } }}>
+          <MySpanishPanel />
         </Box>
       </Box>
     </Box>

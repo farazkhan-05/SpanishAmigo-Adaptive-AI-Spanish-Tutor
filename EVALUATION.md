@@ -42,4 +42,8 @@ This is an offline, model-free, database-free `C_planner` evaluation over 20 cur
 
 Live structured-assessment smoke test: **NOT RUN**. Local PostgreSQL/pgvector retrieval evaluation and disposable PostgreSQL migration verification: **NOT RUN**.
 
+## Phase 6 offline state-loop evaluation
+
+Phase 6 deterministic unit coverage was added for unknown-to-first accepted evidence, independent correct/incorrect, assisted correct, rejected ownership/status, duplicate event idempotency, bounds, FSRS Again/Hard/Good mapping, UTC rationale, and two-user isolation. This is an offline application test; it does not measure learner outcomes or validate PostgreSQL DDL. Final adaptive product C remains **NOT IMPLEMENTED** because frontend and final evaluation phases remain pending.
+
 Known limitations: no live model judge or generated-response scoring exists; guardrail outcomes are not evaluated by the offline runner; the optional DB mode requires existing local database and configured provider access; retrieval fixtures do not claim to execute pgvector.

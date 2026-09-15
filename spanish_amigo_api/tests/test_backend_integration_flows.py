@@ -17,7 +17,7 @@ os.environ.setdefault("GEMINI_API_KEY", "test-key")
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import get_db
-from app.models import AssessmentEvent, ChatMessage, ChatSession, CompletedLesson, LearnerSkillState, PracticeAttempt, Skill, SystemStatus, User
+from app.models import AssessmentEvent, ChatMessage, ChatSession, CompletedLesson, LearnerSkillState, PracticeAttempt, ReviewHistory, ReviewItem, Skill, SystemStatus, User
 from app.curriculum_metadata import SKILLS
 from app.services.adaptive import create_assessment_event, create_practice_attempt, create_unknown_state
 from app.schemas import AssessmentProposal
@@ -59,7 +59,9 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         Skill.__table__.create(bind=cls.engine, checkfirst=True)
         LearnerSkillState.__table__.create(bind=cls.engine, checkfirst=True)
         AssessmentEvent.__table__.create(bind=cls.engine, checkfirst=True)
+        ReviewItem.__table__.create(bind=cls.engine, checkfirst=True)
         PracticeAttempt.__table__.create(bind=cls.engine, checkfirst=True)
+        ReviewHistory.__table__.create(bind=cls.engine, checkfirst=True)
         SystemStatus.__table__.create(bind=cls.engine, checkfirst=True)
 
         def _override_db():
@@ -98,7 +100,9 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         try:
             db.execute(delete(ChatMessage))
             db.execute(delete(ChatSession))
+            db.execute(delete(ReviewHistory))
             db.execute(delete(PracticeAttempt))
+            db.execute(delete(ReviewItem))
             db.execute(delete(AssessmentEvent))
             db.execute(delete(LearnerSkillState))
             db.execute(delete(CompletedLesson))

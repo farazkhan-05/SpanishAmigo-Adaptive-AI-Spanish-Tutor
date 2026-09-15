@@ -86,6 +86,28 @@ class AdaptiveStateResponse(BaseModel):
     status: str = Field(..., pattern="^(not_assessed|evidence_insufficient|assessed)$")
 
 
+class ReviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    review_id: str
+    skill_id: str
+    display_name: str
+    due_at: datetime
+    rationale: str
+
+
+class ReviewSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attempt_id: str = Field(..., min_length=1, max_length=36)
+    learner_answer: str = Field(..., min_length=1, max_length=2000)
+
+
+class ReviewStartResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attempt_id: str
+    exercise_id: str
+    exercise_text: str
+
+
 class AssessmentProposal(BaseModel):
     """Strict, reasoning-free model proposal. Application validation is authoritative."""
 

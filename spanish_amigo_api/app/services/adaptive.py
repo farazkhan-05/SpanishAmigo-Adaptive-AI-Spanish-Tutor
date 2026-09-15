@@ -6,8 +6,10 @@ mastery.  Callers must pass the UID obtained from verified Firebase claims.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 import hashlib
+import json
 import re
 import unicodedata
 from typing import Literal, Optional, Sequence, cast
@@ -15,9 +17,10 @@ from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from fsrs import Card, Rating, Scheduler, State
 
 from app.curriculum_metadata import SKILLS, TAXONOMY_VERSION, SkillDefinition
-from app.models import AssessmentEvent, LearnerSkillState, PracticeAttempt
+from app.models import AssessmentEvent, LearnerSkillState, PracticeAttempt, ReviewHistory, ReviewItem
 from app.schemas import AssessmentProposal
 
 AssessmentStatus = Literal["proposed", "accepted", "rejected", "ambiguous", "invalid", "low_confidence"]
@@ -29,6 +32,196 @@ ASSESSMENT_AUDIT_VERSION = f"{VALIDATOR_VERSION};schema={ASSESSMENT_VERSION}"
 MIN_ACCEPTANCE_CONFIDENCE = 0.80
 LOW_MASTERY_MAX = 0.35
 DEVELOPING_MASTERY_MAX = 0.70
+MASTERY_ALGORITHM_VERSION = "phase6-evidence-step-v1"
+FSRS_LIBRARY_VERSION = "6.3.2"
+FSRS_SCHEDULER_VERSION = "py-fsrs-defaults-v6"
+
+
+@dataclass(frozen=True)
+class MasteryUpdate:
+    estimate: float
+    confidence: float
+    evidence_weight: float
+
+
+@dataclass(frozen=True)
+class ReviewAssessmentResult:
+    event: AssessmentEvent
+    state: LearnerSkillState | None
+    completed: bool
+
+
+def review_exercise_text(skill_id: str) -> str:
+    """Server-owned, taxonomy-grounded recall prompt; no claim of success on display."""
+    skill = skill_definition(skill_id)
+    return f"Recall practice for {skill.display_label}: write one Spanish answer that demonstrates {skill.description}. Your turn."
+
+
+def start_due_review(db: Session, *, verified_uid: str, review_id: str, now: datetime | None = None) -> PracticeAttempt:
+    now = _utc(now or datetime.now(UTC))
+    item = db.scalar(select(ReviewItem).where(ReviewItem.id == review_id, ReviewItem.user_id == verified_uid).with_for_update())
+    if item is None: raise ValueError("review not found")
+    if _utc(item.due_at) > now: raise ValueError("review is not due")
+    skill = skill_definition(item.skill_id)
+    if not mastery_eligibility(item.skill_id, "text") or skill.category == "vocabulary":
+        raise ValueError("review skill is not text-mastery eligible")
+    # Only one open server-issued exercise per due card; a retry resumes it.
+    attempt = db.scalar(select(PracticeAttempt).where(PracticeAttempt.user_id == verified_uid, PracticeAttempt.review_item_id == item.id, PracticeAttempt.outcome == "pending").order_by(PracticeAttempt.created_at.desc()))
+    if attempt is not None: return attempt
+    exercise_id = f"review:{item.id}:{uuid4()}"
+    attempt = create_practice_attempt(db, verified_uid=verified_uid, skill_id=item.skill_id,
+        exercise_type="fsrs_review", source_event_key=f"review-start:{item.id}:{exercise_id}", review_item_id=item.id,
+        exercise_id=exercise_id, prompt_snapshot=review_exercise_text(item.skill_id), outcome="pending",
+        support_level="independent", independent_recall=True, processing_version="phase6-review-exercise-v1")
+    db.flush()
+    return attempt
+
+
+def assess_review_submission(db: Session, *, verified_uid: str, review_id: str, attempt_id: str,
+                             learner_answer: str) -> ReviewAssessmentResult:
+    """Phase-5 proposal/validation reused for a server-issued review exercise."""
+    item = db.scalar(select(ReviewItem).where(ReviewItem.id == review_id, ReviewItem.user_id == verified_uid).with_for_update())
+    if item is None: raise ValueError("review not found")
+    attempt = db.scalar(select(PracticeAttempt).where(PracticeAttempt.id == attempt_id, PracticeAttempt.user_id == verified_uid).with_for_update())
+    if attempt is None or attempt.review_item_id != item.id or attempt.skill_id != item.skill_id: raise ValueError("review attempt not found")
+    if attempt.assessment_event_id:
+        event = db.get(AssessmentEvent, attempt.assessment_event_id)
+        if event is None: raise RuntimeError("completed review attempt has no event")
+        return ReviewAssessmentResult(event, get_state_for_user(db, verified_uid, item.skill_id), True)
+    if attempt.outcome != "pending": raise ValueError("review attempt already completed")
+    gate = assessability_gate(learner_answer, prior_messages=(attempt.prompt_snapshot or "Your turn",))
+    event_key = f"review-submit:{attempt.id}"
+    try:
+        # Local import prevents the existing ai -> adaptive dependency from becoming circular.
+        from app.services.ai import propose_assessment
+        proposal, model_version = propose_assessment(learner_answer, db)
+        validation = validate_assessment_proposal(proposal, learner_turn=learner_answer, gate=gate, evidence_modality="text")
+        if validation.status == "accepted" and (validation.skill is None or validation.skill.skill_id != item.skill_id):
+            validation = EvidenceValidation("rejected", "review_skill_mismatch", validation.skill, validation.normalized_evidence, validation.span_start, validation.span_end)
+        event = create_assessment_event(db, verified_uid=verified_uid, skill_id=validation.skill.skill_id if validation.skill else None,
+            source_type="practice_attempt", evidence_snapshot=proposal.evidence, normalized_evidence=validation.normalized_evidence,
+            evidence_span_start=validation.span_start, evidence_span_end=validation.span_end, evidence_modality="text",
+            proposed_result=proposal.result, validation_status=validation.status, proposal_confidence=proposal.confidence,
+            error_type=proposal.error_type, severity=proposal.severity, correction=proposal.correction,
+            misconception_id=proposal.misconception_id, rejection_reason=validation.reason,
+            validator_version=ASSESSMENT_AUDIT_VERSION, assessment_model_version=model_version, source_event_key=event_key)
+    except Exception as error:
+        # Provider/schema failure is durable audit evidence, never fabricated correctness.
+        event = create_assessment_event(db, verified_uid=verified_uid, skill_id=item.skill_id, source_type="practice_attempt",
+            evidence_snapshot=learner_answer, proposed_result="not_applicable", validation_status="invalid", evidence_modality="text",
+            rejection_reason="review_assessment_provider_or_schema_failure", validator_version=ASSESSMENT_AUDIT_VERSION,
+            source_event_key=event_key)
+    attempt.learner_response_snapshot = learner_answer
+    attempt.assessment_event_id = event.id
+    attempt.outcome = event.proposed_result if event.validation_status == "accepted" else "invalid"
+    if event.validation_status != "accepted":
+        db.flush()
+        return ReviewAssessmentResult(event, None, True)
+    state = process_accepted_evidence(db, verified_uid=verified_uid, event_id=event.id, practice_attempt_id=attempt.id)
+    db.flush()
+    return ReviewAssessmentResult(event, state, True)
+
+
+def update_mastery(*, previous: float | None, accepted_count: int, result: LearnerResult,
+                   support_level: str, independent_recall: bool, validation_confidence: float | None) -> MasteryUpdate:
+    """Versioned, bounded evidence-step estimate; it is not a calibrated statistical model.
+
+    First evidence starts at 0.50, then a signed step moves toward 1 for correct or
+    0 for incorrect. Base step is .12 independent / .05 assisted, partial is half,
+    confidence only ranges from .80 to 1.0, and repeated evidence decays by 1/(1+n/8).
+    Confidence is evidence strength: independent .20, assisted .08, capped at .90.
+    """
+    if result not in {"correct", "incorrect", "partial"}:
+        raise ValueError("mastery update requires a concrete result")
+    assisted = support_level in {"hinted", "guided"} or not independent_recall
+    base = 0.05 if assisted else 0.12
+    if result == "partial": base *= 0.5
+    confidence_factor = max(0.8, min(1.0, validation_confidence or MIN_ACCEPTANCE_CONFIDENCE))
+    step = base * confidence_factor / (1 + accepted_count / 8)
+    current = 0.5 if previous is None else previous
+    if result == "correct":
+        estimate = current + step * (1 - current)
+    else:
+        estimate = current - step * current
+    prior_strength = 0.0 if previous is None else min(0.90, accepted_count * 0.20)
+    strength = 0.08 if assisted else 0.20
+    return MasteryUpdate(round(max(0.0, min(1.0, estimate)), 6), round(min(0.90, prior_strength + strength * confidence_factor), 6), step)
+
+
+def fsrs_rating_for_event(*, result: LearnerResult, support_level: str, independent_recall: bool) -> Rating:
+    """Application-owned mapping. Easy is intentionally never emitted automatically."""
+    if result == "incorrect" and independent_recall and support_level == "independent":
+        return Rating.Again
+    if result == "correct" and independent_recall and support_level == "independent":
+        return Rating.Good
+    if result in {"correct", "partial"} and support_level in {"hinted", "guided"}:
+        return Rating.Hard
+    raise ValueError("event does not have a defensible FSRS rating")
+
+
+def _card_dict(card: Card) -> dict[str, object]:
+    return {"state": card.state.value, "step": card.step, "stability": card.stability, "difficulty": card.difficulty,
+            "due": card.due.astimezone(UTC).isoformat(), "last_review": card.last_review.astimezone(UTC).isoformat() if card.last_review else None}
+
+
+def _utc(value: datetime) -> datetime:
+    """PostgreSQL persists aware UTC; this also keeps SQLite test adapters honest."""
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _card_from_item(item: ReviewItem | None, now: datetime) -> Card:
+    if item is None:
+        return Card(state=State.Learning, due=now)
+    return Card(state=State(item.card_state), step=item.card_step, stability=item.stability, difficulty=item.difficulty,
+                due=_utc(item.due_at), last_review=_utc(item.last_review_at) if item.last_review_at else None)
+
+
+def process_accepted_evidence(db: Session, *, verified_uid: str, event_id: str, practice_attempt_id: str | None = None,
+                              now: datetime | None = None) -> LearnerSkillState:
+    """Single transactional authoritative event-to-state transition; retries return existing history."""
+    now = (now or datetime.now(UTC)).astimezone(UTC)
+    event = db.scalar(select(AssessmentEvent).where(AssessmentEvent.id == event_id, AssessmentEvent.user_id == verified_uid).with_for_update())
+    if event is None: raise ValueError("event not found for authenticated user")
+    if event.validation_status != "accepted" or event.skill_id is None or not mastery_eligibility(event.skill_id, event.evidence_modality):
+        raise ValueError("event is not mastery eligible")
+    if event.proposed_result not in {"correct", "incorrect", "partial"}: raise ValueError("event result is not concrete")
+    attempt = None
+    if practice_attempt_id:
+        attempt = db.scalar(select(PracticeAttempt).where(PracticeAttempt.id == practice_attempt_id, PracticeAttempt.user_id == verified_uid).with_for_update())
+        if attempt is None or attempt.skill_id != event.skill_id or attempt.assessment_event_id != event.id: raise ValueError("attempt does not own this event")
+    if db.scalar(select(ReviewHistory).where(ReviewHistory.assessment_event_id == event.id)):
+        state = get_state_for_user(db, verified_uid, event.skill_id)
+        if state is None: raise RuntimeError("idempotency history without state")
+        return state
+    if attempt is None or attempt.support_level == "exposure": raise ValueError("eligible accepted practice attempt required")
+    skill = skill_definition(event.skill_id)
+    if skill.assessment_mode != "text" or skill.category == "vocabulary": raise ValueError("non-atomic skill")
+    state = create_unknown_state(db, verified_uid, event.skill_id)
+    update = update_mastery(previous=state.mastery_estimate, accepted_count=state.accepted_evidence_count, result=cast(LearnerResult, event.proposed_result), support_level=attempt.support_level, independent_recall=attempt.independent_recall, validation_confidence=event.proposal_confidence)
+    rating = fsrs_rating_for_event(result=cast(LearnerResult, event.proposed_result), support_level=attempt.support_level, independent_recall=attempt.independent_recall)
+    item = db.scalar(select(ReviewItem).where(ReviewItem.user_id == verified_uid, ReviewItem.skill_id == event.skill_id).with_for_update())
+    before = _card_from_item(item, now)
+    after, _log = Scheduler(enable_fuzzing=False).review_card(before, rating, review_datetime=now)
+    if item is None:
+        item = ReviewItem(id=str(uuid4()), user_id=verified_uid, skill_id=event.skill_id, card_state=after.state.value, card_step=after.step, stability=after.stability, difficulty=after.difficulty, due_at=after.due.astimezone(UTC), last_review_at=after.last_review.astimezone(UTC) if after.last_review else None, fsrs_version=FSRS_LIBRARY_VERSION, scheduler_version=FSRS_SCHEDULER_VERSION, created_at=now, updated_at=now)
+        db.add(item)
+    else:
+        item.card_state, item.card_step, item.stability, item.difficulty, item.due_at, item.last_review_at = after.state.value, after.step, after.stability, after.difficulty, after.due.astimezone(UTC), after.last_review.astimezone(UTC) if after.last_review else None
+        item.updated_at = now
+    state.mastery_estimate, state.estimate_confidence = update.estimate, update.confidence
+    state.accepted_evidence_count += 1
+    if attempt.independent_recall: state.independent_attempt_count += 1
+    else: state.assisted_attempt_count += 1
+    state.last_evidence_at = now.replace(tzinfo=None); state.last_practiced_at = now.replace(tzinfo=None); state.state_version += 1
+    db.add(ReviewHistory(id=str(uuid4()), user_id=verified_uid, review_item_id=item.id, skill_id=event.skill_id, practice_attempt_id=attempt.id, assessment_event_id=event.id, rating=rating.value, previous_card=json.dumps(_card_dict(before), sort_keys=True), new_card=json.dumps(_card_dict(after), sort_keys=True), due_at=after.due.astimezone(UTC), mastery_algorithm_version=MASTERY_ALGORITHM_VERSION, fsrs_version=FSRS_LIBRARY_VERSION, created_at=now))
+    db.flush()
+    return state
+
+
+def review_rationale(item: ReviewItem, history: ReviewHistory | None, now: datetime) -> str:
+    if _utc(item.due_at) <= _utc(now): return "review is due"
+    if history and history.rating == Rating.Again.value: return "previous independent recall failed"
+    return "skill needs additional validated evidence"
 
 
 class UserIntent(str, Enum):
@@ -242,7 +435,8 @@ def create_unknown_state(db: Session, verified_uid: str, skill_id: str) -> Learn
     existing = get_state_for_user(db, verified_uid, skill_id)
     if existing:
         return existing
-    state = LearnerSkillState(user_id=verified_uid, skill_id=skill_id)
+    state = LearnerSkillState(user_id=verified_uid, skill_id=skill_id, accepted_evidence_count=0,
+                              independent_attempt_count=0, assisted_attempt_count=0, state_version=1)
     db.add(state)
     return state
 

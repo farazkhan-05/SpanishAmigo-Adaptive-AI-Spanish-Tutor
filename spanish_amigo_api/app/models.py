@@ -34,6 +34,8 @@ class User(Base):
     practice_attempts: Mapped[list["PracticeAttempt"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    review_items: Mapped[list["ReviewItem"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    review_history: Mapped[list["ReviewHistory"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class CompletedLesson(Base):
@@ -230,6 +232,7 @@ class PracticeAttempt(Base):
     user_id: Mapped[str] = mapped_column(String(128), ForeignKey("users.id", ondelete="CASCADE", name="fk_practice_attempts_user"), nullable=False)
     skill_id: Mapped[str] = mapped_column(String(100), ForeignKey("skills.skill_id", ondelete="RESTRICT", name="fk_practice_attempts_skill"), nullable=False)
     assessment_event_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("assessment_events.id", ondelete="RESTRICT", name="fk_practice_attempts_assessment_event"), nullable=True)
+    review_item_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("review_items.id", ondelete="SET NULL", name="fk_practice_attempts_review_item"), nullable=True)
     chat_session_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("chat_sessions.id", ondelete="SET NULL", name="fk_practice_attempts_chat_session"), nullable=True)
     chat_message_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("chat_messages.id", ondelete="SET NULL", name="fk_practice_attempts_chat_message"), nullable=True)
     exercise_id: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
@@ -253,6 +256,46 @@ class PracticeAttempt(Base):
         CheckConstraint("independent_recall = false OR (support_level = 'independent' AND hint_used = false)", name="ck_practice_attempts_independent_recall"),
         Index("ix_practice_attempts_user_created", "user_id", "created_at"),
     )
+
+
+class ReviewItem(Base):
+    """One FSRS card per verified user and atomic skill."""
+    __tablename__ = "review_items"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), ForeignKey("users.id", ondelete="CASCADE", name="fk_review_items_user"), nullable=False)
+    skill_id: Mapped[str] = mapped_column(String(100), ForeignKey("skills.skill_id", ondelete="RESTRICT", name="fk_review_items_skill"), nullable=False)
+    card_state: Mapped[int] = mapped_column(Integer, nullable=False)
+    card_step: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    stability: Mapped[Optional[float]] = mapped_column(nullable=True)
+    difficulty: Mapped[Optional[float]] = mapped_column(nullable=True)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_review_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    fsrs_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    scheduler_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    user: Mapped["User"] = relationship(back_populates="review_items")
+    __table_args__ = (UniqueConstraint("user_id", "skill_id", name="uq_review_items_user_skill"), Index("ix_review_items_user_due", "user_id", "due_at"))
+
+
+class ReviewHistory(Base):
+    """Immutable scheduler transition; no model reasoning is retained."""
+    __tablename__ = "review_history"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), ForeignKey("users.id", ondelete="CASCADE", name="fk_review_history_user"), nullable=False)
+    review_item_id: Mapped[str] = mapped_column(String(36), ForeignKey("review_items.id", ondelete="CASCADE", name="fk_review_history_item"), nullable=False)
+    skill_id: Mapped[str] = mapped_column(String(100), ForeignKey("skills.skill_id", ondelete="RESTRICT", name="fk_review_history_skill"), nullable=False)
+    practice_attempt_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("practice_attempts.id", ondelete="SET NULL", name="fk_review_history_attempt"), nullable=True)
+    assessment_event_id: Mapped[str] = mapped_column(String(36), ForeignKey("assessment_events.id", ondelete="RESTRICT", name="fk_review_history_event"), nullable=False)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_card: Mapped[str] = mapped_column(Text, nullable=False)
+    new_card: Mapped[str] = mapped_column(Text, nullable=False)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    mastery_algorithm_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    fsrs_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    user: Mapped["User"] = relationship(back_populates="review_history")
+    __table_args__ = (UniqueConstraint("assessment_event_id", name="uq_review_history_event"), Index("ix_review_history_user_created", "user_id", "created_at"), CheckConstraint("rating BETWEEN 1 AND 4", name="ck_review_history_rating"))
 
 
 class SystemStatus(Base):

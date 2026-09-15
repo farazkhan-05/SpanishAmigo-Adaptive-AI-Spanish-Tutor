@@ -40,3 +40,30 @@ def binary_macro_f1(expected: list[bool], observed: list[bool]) -> float | None:
         denominator = 2 * tp + fp + fn
         scores.append((2 * tp / denominator) if denominator else 0.0)
     return sum(scores) / 2
+
+
+def precision(expected: Sequence[bool], observed: Sequence[bool]) -> float | None:
+    """Positive predictive value; None means there were no predicted positives."""
+    predicted = sum(observed)
+    return sum(a and b for a, b in zip(expected, observed)) / predicted if predicted else None
+
+
+def recall(expected: Sequence[bool], observed: Sequence[bool]) -> float | None:
+    """True-positive rate; None means the corpus has no positive labels."""
+    positives = sum(expected)
+    return sum(a and b for a, b in zip(expected, observed)) / positives if positives else None
+
+
+def macro_f1(expected: Sequence[object], observed: Sequence[object]) -> float | None:
+    if len(expected) != len(observed):
+        raise ValueError("expected and observed must have equal length")
+    labels = sorted(set(expected) | set(observed), key=str)
+    if not labels:
+        return None
+    scores: list[float] = []
+    for label in labels:
+        tp = sum(a == label and b == label for a, b in zip(expected, observed))
+        fp = sum(a != label and b == label for a, b in zip(expected, observed))
+        fn = sum(a == label and b != label for a, b in zip(expected, observed))
+        scores.append(2 * tp / (2 * tp + fp + fn) if 2 * tp + fp + fn else 0.0)
+    return mean(scores)

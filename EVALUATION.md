@@ -1,49 +1,39 @@
-# SpanishAmigo pre-adaptive evaluation baseline
+# SpanishAmigo Adaptive V2 evaluation
 
-Evaluation protects an honest before/after comparison while retrieval and curriculum evolve. Every result is marked **MEASURED**, **NOT RUN**, or **NOT IMPLEMENTED**; this repository contains no placeholder scores.
+The version-controlled, human-curated corpus has 150 cases: 62 frozen general A/B cases, 20 Phase-5 planner cases, and 68 Phase-7 safety/state cases. Labels are evaluator-authored and are never generated or rewritten by the system under test.
 
-Baseline A is the existing Lumi tutoring prompt and generation-model/fallback behavior with curriculum retrieval excluded. It is evaluation-only, not a production mode. Baseline B is the current production RAG path: Gemini `gemini-embedding-2` configured through `GEMINI_EMBEDDING_MODEL`, a 768-dimensional query prefixed `task: search result | query: `, cosine ranking against `lesson_slides`, top 3 candidates, and only context under cosine distance `0.65`, formatted beneath `RELEVANT LESSON REFERENCE CONTEXT`. B retains the current tutor prompt and model fallback behavior. Final C, the complete adaptive learner-state tutor, is **NOT IMPLEMENTED**. Phase 5 is labeled `C_planner`: planning and validated evidence only, with no mastery mutation or scheduling.
+Definitions: **A** is the prompt-only Lumi tutor baseline, with retrieval excluded. **B** is the frozen pre-adaptive Phase-2 RAG baseline (Gemini embedding cosine retrieval over `lesson_slides`, top 3, distance threshold 0.65). **C** is the current adaptive backend: shared Phase-5 planner, assessability, structured proposal, deterministic validation and policy, learner state, deterministic Phase-6 mastery updates, practice attempts, FSRS review scheduling, and review submission. C does not include the Phase-8 frontend. Production retrieval remains `B_legacy`; `B_metadata` and `B_hybrid` are experiments only.
 
-Phase 3 retains this frozen B behavior as retrieval variant `B_legacy`. `B_metadata` (filtered semantic candidates) and `B_hybrid` (semantic plus PostgreSQL lexical candidates fused by deterministic RRF, k=60) are B-side engineering experiments, not replacements for the A/B/C product definitions. Production remains `B_legacy` until a safe local evaluation shows non-regression. Local retrieval evaluation for all Phase 3 variants: **NOT RUN**.
-
-The initial versioned dataset has 62 human-curated cases spanning Spanish correctness/corrections, ser/estar, articles/gender, conjugation, vocabulary, self-correction, ambiguity, grammar questions, non-assessable inputs, greetings, translation, curriculum questions, retrieval distractors/cross-lesson evidence, off-topic content, injection, guardrail boundaries, and minimal inputs. It deliberately uses broad grammar labels and current lesson/slide references only; it defines no provisional skill taxonomy.
-
-## Reproduction
+## Offline CI gate
 
 From `spanish_amigo_api`:
 
 ```powershell
-uv run python -m evals.run_eval offline --report evals/reports/offline.json
-```
-
-This is an **OFFLINE METRIC TEST**: deterministic schema/dataset/config/report validation and unit-tested fixture metrics. It makes no network, Gemini, database, or adapter calls. It reports validation reliability; live retrieval and safety outcomes are **NOT RUN**.
-
-```powershell
-uv run python -m evals.run_eval db-retrieval --variant B_legacy --report evals/reports/db-retrieval.json
-```
-
-This optional **LOCAL/INTEGRATION RETRIEVAL EVAL** is explicitly opt-in. It uses configured Gemini embeddings and reads the current local PostgreSQL/pgvector `lesson_slides` table only. It never seeds, migrates, writes, or runs destructive curriculum tooling. It measures Recall@3 and MRR only for cases with slide labels and records stable case-ID failure artifacts.
-
-```powershell
-uv run python -m evals.run_eval live-model --baseline B --limit 1 --confirm-live --report evals/reports/live-model.json
-```
-
-This optional **LIVE MODEL EVAL** is deliberately opt-in and requires `--confirm-live`; it invokes the configured Gemini generation model and may consume quota. It can run A (prompt-only) or B (current RAG), records timestamp, Git SHA, dataset hash, baseline configuration, observed guardrail behavior, latency, and provider-supplied token usage when available. It does not call a model judge or claim generated-answer correctness. The external model is mutable, so live results are not perfectly reproducible.
-
-Implemented retrieval metrics are Recall@K and MRR. Reliability reports case-load and run failures. Safety, latency, and token usage are report fields but are **NOT RUN** unless an applicable adapter supplies actual observations; token use is never estimated. Adaptive mastery mutation and FSRS metrics are **NOT IMPLEMENTED**.
-
-## Phase 5 deterministic planner evaluation
-
-```powershell
+uv run python -m evals.run_eval phase7-offline --report evals/reports/phase7-offline.json
 uv run python -m evals.run_eval planner-offline --report evals/reports/phase5-planner.json
 ```
 
-This is an offline, model-free, database-free `C_planner` evaluation over 20 curated cases for assessability, strict proposal parsing, evidence grounding/normalization, invalid skills, speech/contextual/vocabulary enforcement, confidence, user intent, policy, and prompt-injection blocking. On 2026-09-15 it was **MEASURED** with dataset SHA-256 `d7d943fee614be901a119ab7e1b85ff40f0a059b39957c64027618a788c6a88d`: assessability accuracy `1.0`, assessability macro-F1 `1.0`, validation accuracy `1.0`, policy-action accuracy `1.0`, false accepted evidence rate `0.0`, and zero case failures. These measure deterministic fixture behavior, not live model quality. Skill-classification accuracy is **NOT RUN** because fixture proposals are evaluator inputs. Mastery-update metrics and final C remain **NOT IMPLEMENTED**.
+These commands have no Gemini, network, production DB, or executable-evaluation-text dependency. They use fixture structured outputs and deterministic application functions; Phase-6 persistence/end-to-end review behaviour is additionally covered by offline SQLite tests with mocked assessment output and controlled timestamps.
 
-Live structured-assessment smoke test: **NOT RUN**. Local PostgreSQL/pgvector retrieval evaluation and disposable PostgreSQL migration verification: **NOT RUN**.
+The Phase-7 report is machine-readable and records dataset hash, git SHA where available, taxonomy/schema/validator/mastery/policy/FSRS versions, mode, timestamp, retrieval variant, metrics, and stable case-level failure artifacts. Statuses are **MEASURED**, **NOT RUN**, **NOT IMPLEMENTED**, **NOT APPLICABLE**, or **MODEL-JUDGED**.
 
-## Phase 6 offline state-loop evaluation
+Metric denominators: Recall@K is relevant slide IDs returned in first K divided by labeled relevant slide IDs; MRR is reciprocal rank of the first relevant result over labeled retrieval cases. Assessability accuracy uses all assessability-labeled cases; precision divides correct assessable predictions by assessable predictions; recall divides them by assessable labels; macro-F1 averages per-label F1. Accepted-evidence precision divides valid accepts by all accepts; rejected-evidence accuracy uses negative validation cases; false accepted evidence rate divides invalid/rejected golden cases accepted by the validator by all such negative cases. Legitimate update success divides expected legitimate mutations that occurred by legitimate-mutation expectations; false mastery-update rate divides mutations where gold says no mutation by no-mutation cases; duplicate-update rate divides duplicate cases producing a second mutation by duplicate cases. Tenancy violation rate divides unauthorized accesses that succeed by unauthorized attempts. Review correctness uses its labeled deterministic review/rating/rejection cases. Schema failure rate is invalid evaluation records divided by records loaded.
 
-Phase 6 deterministic unit coverage was added for unknown-to-first accepted evidence, independent correct/incorrect, assisted correct, rejected ownership/status, duplicate event idempotency, bounds, FSRS Again/Hard/Good mapping, UTC rationale, and two-user isolation. This is an offline application test; it does not measure learner outcomes or validate PostgreSQL DDL. Final adaptive product C remains **NOT IMPLEMENTED** because frontend and final evaluation phases remain pending.
+Critical zero-violation gates: cross-tenant access, contextual mastery, text-only speech mastery, duplicate mastery mutation, duplicate FSRS update, client-selected mastery/rating, and invalid/rejected evidence mutation. They exist because a false learner-state change is materially more harmful than a missed tutoring preference.
 
-Known limitations: no live model judge or generated-response scoring exists; guardrail outcomes are not evaluated by the offline runner; the optional DB mode requires existing local database and configured provider access; retrieval fixtures do not claim to execute pgvector.
+## Measured offline result (2026-09-15)
+
+Phase 7 C backend fixture evaluation: assessability accuracy/precision/recall/macro-F1 1.0; accepted-evidence precision 1.0; false accepted evidence 0.0; policy accuracy/macro-F1 1.0; legitimate update success 1.0; false mastery update 0.0; duplicate update 0.0; bounds violations 0; review deterministic correctness/rating mapping 1.0; tenancy unauthorized-access success 0.0; safety invariant violations 0; run failures 0. These measure deterministic backend fixtures, not learner outcomes or free-form tutor quality. A and B adaptive metrics are **NOT APPLICABLE**. Real retrieval Recall@1/3/K and MRR are **NOT RUN** without a safe local corpus/DB. Latency and tokens are **NOT RUN** unless actually observed.
+
+## Explicit opt-in live/integration evaluation
+
+```powershell
+uv run python -m evals.run_eval live-assessment-smoke --limit 5 --confirm-live --report evals/reports/live-c-smoke.json
+uv run python -m evals.run_eval live-model --baseline A --limit 5 --confirm-live --report evals/reports/live-a.json
+uv run python -m evals.run_eval live-model --baseline B --limit 5 --confirm-live --report evals/reports/live-b.json
+uv run python -m evals.run_eval db-retrieval --variant B_legacy --report evals/reports/db-retrieval.json
+```
+
+Live tutoring quality is optional and must identify provider/model/config and label any judge result **MODEL-JUDGED**. Use the versioned rubric dimensions correctness, curriculum grounding, pedagogical usefulness, level appropriateness, directness, hallucination, and unnecessary adaptation/interruption; prefer blinded pairwise A/B/C comparisons. A judge is supplementary, never the sole signal or CI requirement. The real DB command is read-only and must target only a known safe local database; it is not run automatically.
+
+Known limitations: fixture retrieval is not a pgvector benchmark; no live judge/model call was run; PostgreSQL/pgvector migrations remain **NOT VERIFIED**; the Phase-7 scenario runner complements rather than replaces endpoint integration tests.

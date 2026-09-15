@@ -82,3 +82,24 @@ class Phase5Case:
         if not isinstance(raw["expected_action"], str) or not isinstance(raw["notes"], str) or not raw["notes"]:
             raise CaseValidationError("action and notes must be non-empty strings")
         return cls(**raw)
+
+
+@dataclass(frozen=True)
+class Phase7Case:
+    """Human-authored deterministic safety/state scenario; never model-generated."""
+    id: str
+    category: str
+    scenario: str
+    expected: dict[str, Any]
+    notes: str
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "Phase7Case":
+        required = {"id", "category", "scenario", "expected", "notes"}
+        if set(raw) != required:
+            raise CaseValidationError(f"phase7 fields must be exactly {sorted(required)}")
+        if not all(isinstance(raw[name], str) and raw[name] for name in ("id", "category", "scenario", "notes")):
+            raise CaseValidationError("id, category, scenario, and notes must be non-empty strings")
+        if not isinstance(raw["expected"], dict) or not raw["expected"]:
+            raise CaseValidationError("expected must be a non-empty object")
+        return cls(**raw)

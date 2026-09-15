@@ -4,6 +4,8 @@ Evaluation protects an honest before/after comparison while retrieval and curric
 
 Baseline A is the existing Lumi tutoring prompt and generation-model/fallback behavior with curriculum retrieval excluded. It is evaluation-only, not a production mode. Baseline B is the current production RAG path: Gemini `gemini-embedding-2` configured through `GEMINI_EMBEDDING_MODEL`, a 768-dimensional query prefixed `task: search result | query: `, cosine ranking against `lesson_slides`, top 3 candidates, and only context under cosine distance `0.65`, formatted beneath `RELEVANT LESSON REFERENCE CONTEXT`. B retains the current tutor prompt and model fallback behavior. C, the adaptive learner-state tutor, is **NOT IMPLEMENTED**.
 
+Phase 3 retains this frozen B behavior as retrieval variant `B_legacy`. `B_metadata` (filtered semantic candidates) and `B_hybrid` (semantic plus PostgreSQL lexical candidates fused by deterministic RRF, k=60) are B-side engineering experiments, not replacements for the A/B/C product definitions. Production remains `B_legacy` until a safe local evaluation shows non-regression. Local retrieval evaluation for all Phase 3 variants: **NOT RUN**.
+
 The initial versioned dataset has 62 human-curated cases spanning Spanish correctness/corrections, ser/estar, articles/gender, conjugation, vocabulary, self-correction, ambiguity, grammar questions, non-assessable inputs, greetings, translation, curriculum questions, retrieval distractors/cross-lesson evidence, off-topic content, injection, guardrail boundaries, and minimal inputs. It deliberately uses broad grammar labels and current lesson/slide references only; it defines no provisional skill taxonomy.
 
 ## Reproduction
@@ -17,7 +19,7 @@ uv run python -m evals.run_eval offline --report evals/reports/offline.json
 This is an **OFFLINE METRIC TEST**: deterministic schema/dataset/config/report validation and unit-tested fixture metrics. It makes no network, Gemini, database, or adapter calls. It reports validation reliability; live retrieval and safety outcomes are **NOT RUN**.
 
 ```powershell
-uv run python -m evals.run_eval db-retrieval --report evals/reports/db-retrieval.json
+uv run python -m evals.run_eval db-retrieval --variant B_legacy --report evals/reports/db-retrieval.json
 ```
 
 This optional **LOCAL/INTEGRATION RETRIEVAL EVAL** is explicitly opt-in. It uses configured Gemini embeddings and reads the current local PostgreSQL/pgvector `lesson_slides` table only. It never seeds, migrates, writes, or runs destructive curriculum tooling. It measures Recall@3 and MRR only for cases with slide labels and records stable case-ID failure artifacts.

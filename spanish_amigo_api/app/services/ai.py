@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
 from app.models import ChatMessage, User, LessonSlide, SystemStatus
+from app.services.retrieval import legacy_semantic
 from app.database import SessionLocal  # Backward-compatible symbol for legacy tests/mocks
 
 settings = get_settings()
@@ -423,19 +424,13 @@ def prepare_tutor_messages(state: TutorState, db: Session) -> List[BaseMessage]:
             )
             query_vector = emb_res.embeddings[0].values
             
-            # Match semantic similarity in Neon Postgres using type-safe ORM cosine distance
-            distance_expr = LessonSlide.embedding.cosine_distance(query_vector)
-            stmt = select(LessonSlide, distance_expr.label("distance")).order_by(distance_expr).limit(3)
-            results = db.execute(stmt).all()
-
             relevant_chunks = []
-            for slide, distance in results:
-                # High-relevance matching (distance < 0.65 represent top-tier matches)
-                if distance < 0.65:
-                    chunk = f"[Lesson {slide.lesson_id} Slide {slide.slide_index}] {slide.content_text}"
-                    if slide.explanation:
-                        chunk += f"\nExplanation: {slide.explanation}"
-                    relevant_chunks.append(chunk)
+            # Production remains the frozen Phase-2 B adapter until evaluation approves activation.
+            for result in legacy_semantic(db, query_vector):
+                chunk = f"[Lesson {result.lesson_id} Slide {result.slide_index}] {result.content_text}"
+                if result.explanation:
+                    chunk += f"\nExplanation: {result.explanation}"
+                relevant_chunks.append(chunk)
                     
             if relevant_chunks:
                 context_str = "\n---\n".join(relevant_chunks)

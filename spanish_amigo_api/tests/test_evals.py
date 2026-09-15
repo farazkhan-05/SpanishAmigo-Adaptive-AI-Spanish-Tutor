@@ -54,6 +54,9 @@ class EvaluationTests(unittest.TestCase):
     def test_baseline_configuration_is_valid(self):
         validate_baseline_configuration(baseline_configuration())
 
+    def test_retrieval_variants_are_named_without_redefining_baseline(self):
+        self.assertEqual(baseline_configuration()["B"]["top_k"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -29,20 +29,21 @@ def offline_report(cases_path: Path = DEFAULT_CASES_PATH) -> dict[str, Any]:
     return {"mode": "OFFLINE METRIC TEST", "status": "MEASURED", "dataset_sha256": dataset_sha256(cases_path), "case_count": len(cases), "categories": dict(sorted(Counter(case.category for case in cases).items())), "baseline": config, "metrics": {"retrieval": "NOT RUN (fixture metric unit tests only)", "safety": "NOT RUN (no live guardrail adapter in offline runner)", "reliability": {"case_load_failures": 0, "evaluation_run_failures": 0}, "latency": "NOT RUN", "token_usage": "NOT RUN"}, "failures": []}
 
 
-def retrieval_report(cases_path: Path) -> dict[str, Any]:
-    from .adapters.current_rag import retrieve_current_rag, runtime_configuration  # Explicit only: may call Gemini and PostgreSQL.
+def retrieval_report(cases_path: Path, variant: str = "B_legacy") -> dict[str, Any]:
+    from .adapters.current_rag import retrieve_variant, runtime_configuration  # Explicit only: may call Gemini and PostgreSQL.
     cases = load_cases(cases_path)
-    failures, recalls, ranks = [], [], []
+    failures, recalls, recall_ones, ranks = [], [], [], []
     for case in cases:
         if not case.expected_relevant_slide_ids:
             continue
-        observed = retrieve_current_rag(case.user_input)
+        observed = retrieve_variant(case.user_input, variant)
         expected = set(case.expected_relevant_slide_ids)
+        recall_ones.append(recall_at_k(observed, expected, 1))
         recalls.append(recall_at_k(observed, expected, 3))
         ranks.append(reciprocal_rank(observed, expected))
         if not set(observed) & expected:
             failures.append({"case_id": case.id, "expected_behavior": case.expected_behavior, "expected_relevant_slide_ids": sorted(expected), "retrieved_slide_ids": observed, "rank_positions": [], "failure_category": "retrieval_miss"})
-    return _runtime_report("LOCAL/INTEGRATION RETRIEVAL EVAL", cases_path, {"Recall@3": mean(recalls), "MRR": mean(ranks)}, failures, runtime_configuration())
+    return _runtime_report("LOCAL/INTEGRATION RETRIEVAL EVAL", cases_path, {"variant": variant, "Recall@1": mean(recall_ones), "Recall@3": mean(recalls), "MRR": mean(ranks)}, failures, runtime_configuration())
 
 
 def live_report(cases_path: Path, baseline: str, limit: int | None) -> dict[str, Any]:
@@ -72,13 +73,14 @@ def main() -> None:
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES_PATH)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--baseline", choices=("A", "B"), default="B")
+    parser.add_argument("--variant", choices=("B_legacy", "B_metadata", "B_hybrid"), default="B_legacy")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--confirm-live", action="store_true", help="Required because this command invokes Gemini and may consume quota.")
     args = parser.parse_args()
     if args.mode == "offline":
         report = offline_report(args.cases)
     elif args.mode == "db-retrieval":
-        report = retrieval_report(args.cases)
+        report = retrieval_report(args.cases, args.variant)
     else:
         if not args.confirm_live:
             raise SystemExit("LIVE MODEL EVAL requires --confirm-live; no model quota was consumed.")

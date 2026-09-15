@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models import LessonSlide
+from app.services.retrieval import RetrievalFilters, hybrid, legacy_semantic, semantic_metadata
 
 
 def runtime_configuration() -> dict[str, object]:
@@ -25,5 +26,22 @@ def retrieve_current_rag(user_input: str) -> list[str]:
         distance = LessonSlide.embedding.cosine_distance(vector)
         rows = db.execute(select(LessonSlide, distance.label("distance")).order_by(distance).limit(3)).all()
         return [f"L{slide.lesson_id}-S{slide.slide_index}" for slide, value in rows if value < 0.65]
+    finally:
+        db.close()
+
+
+def retrieve_variant(user_input: str, variant: str) -> list[str]:
+    """Read-only B-side retrieval experiments; B_legacy remains the historical adapter."""
+    if variant == "B_legacy":
+        return retrieve_current_rag(user_input)
+    settings = get_settings()
+    client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    vector = client.models.embed_content(model=settings.GEMINI_EMBEDDING_MODEL, contents=f"task: search result | query: {user_input}", config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
+    db = SessionLocal()
+    try:
+        if variant == "B_metadata": rows = semantic_metadata(db, vector, RetrievalFilters())
+        elif variant == "B_hybrid": rows = hybrid(db, user_input, vector, RetrievalFilters())
+        else: raise ValueError(f"unknown retrieval variant: {variant}")
+        return [row.slide_id for row in rows]
     finally:
         db.close()

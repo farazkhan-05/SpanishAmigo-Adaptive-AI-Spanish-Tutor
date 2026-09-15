@@ -1,155 +1,65 @@
+"""Non-destructive, rerunnable curriculum embedding and metadata backfill."""
 import json
 import os
 import sys
 import time
-from sqlalchemy import text
+from dataclasses import asdict
+
 from google import genai
 from google.genai import types
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-# Add parent directory to path so we can import app modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 from app.config import get_settings
-from app.database import engine, SessionLocal
-from app.models import Base, LessonSlide
+from app.curriculum_metadata import SKILLS, TAXONOMY_VERSION, metadata_for_slide, validate_taxonomy
+from app.database import SessionLocal
+from app.models import LessonSlide, LessonSlideSkill, Skill
 
 settings = get_settings()
 
-def seed_database():
-    print("[RAG Seeder] Starting database vector initialization...")
+def _document_text(slide: dict[str, object]) -> str:
+    body = str(slide["content_text"])
+    if slide.get("explanation"): body += f"\nExplanation: {slide['explanation']}"
+    return f"title: Lesson {slide['lesson_id']} Slide {slide['slide_index']} | text: {body}"
 
-    # 1. Enable the vector extension in Neon Postgres
-    db = SessionLocal()
+def backfill(dry_run: bool = False) -> dict[str, int]:
+    """Upsert metadata; only new or source-changed rows request an embedding; never delete slides."""
+    validate_taxonomy()
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lessons_data.json")
+    if not os.path.exists(path): raise FileNotFoundError("lessons_data.json not found; run parse_lessons.js first")
+    slides = json.loads(open(path, encoding="utf-8").read())
+    report = {key: 0 for key in ("inserted", "updated", "unchanged", "unresolved", "failures", "embeddings_generated")}
+    db = SessionLocal(); client = None
     try:
-        print("[RAG Seeder] Enabling pgvector extension in Postgres...")
-        db.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-        db.commit()
-    except Exception as e:
-        print(f"[RAG Seeder] Notice: pgvector check failed or already exists: {e}")
-        db.rollback()
+        for definition in SKILLS:
+            values = {**asdict(definition), "taxonomy_version": TAXONOMY_VERSION}; values.pop("prerequisites")
+            old = db.get(Skill, definition.skill_id)
+            report["inserted" if old is None else "updated" if any(getattr(old, key) != value for key, value in values.items()) else "unchanged"] += 1
+            if not dry_run: db.execute(pg_insert(Skill).values(**values).on_conflict_do_update(index_elements=[Skill.skill_id], set_={key: value for key, value in values.items() if key != "skill_id"}))
+        if not dry_run: db.flush()
+        for data in slides:
+            lesson_id, slide_index = int(data["lesson_id"]), int(data["slide_index"])
+            skill_ids, cefr, difficulty, objective = metadata_for_slide(lesson_id, slide_index)
+            if not skill_ids: report["unresolved"] += 1
+            old = db.query(LessonSlide).filter_by(lesson_id=lesson_id, slide_index=slide_index).one_or_none()
+            source_changed = old is not None and any(getattr(old, key) != data.get(key) for key in ("slide_type", "content_text", "explanation"))
+            values = {"lesson_id": lesson_id, "slide_index": slide_index, "slide_type": data["slide_type"], "content_text": data["content_text"], "explanation": data.get("explanation"), "cefr_level": cefr, "difficulty": difficulty, "learning_objective": objective, "taxonomy_version": TAXONOMY_VERSION}
+            if old is None or old.embedding is None or source_changed:
+                if not dry_run:
+                    client = client or genai.Client(api_key=settings.GEMINI_API_KEY)
+                    values["embedding"] = client.models.embed_content(model=settings.GEMINI_EMBEDDING_MODEL, contents=_document_text(data), config=types.EmbedContentConfig(output_dimensionality=768)).embeddings[0].values
+                    report["embeddings_generated"] += 1; time.sleep(0.75)
+            report["inserted" if old is None else "updated" if any(getattr(old, key) != value for key, value in values.items() if key != "embedding") else "unchanged"] += 1
+            if not dry_run:
+                db.execute(pg_insert(LessonSlide).values(**values).on_conflict_do_update(index_elements=[LessonSlide.lesson_id, LessonSlide.slide_index], set_=values)); db.flush()
+                row = db.query(LessonSlide).filter_by(lesson_id=lesson_id, slide_index=slide_index).one()
+                db.query(LessonSlideSkill).filter_by(lesson_slide_id=row.id, taxonomy_version=TAXONOMY_VERSION).delete(synchronize_session=False)
+                db.add_all(LessonSlideSkill(lesson_slide_id=row.id, skill_id=skill_id, taxonomy_version=TAXONOMY_VERSION) for skill_id in skill_ids)
+        if dry_run: db.rollback()
+        else: db.commit()
+    except Exception:
+        report["failures"] += 1; db.rollback(); raise
+    finally: db.close()
+    return report
 
-    # 2. Drop and recreate the lesson_slides table to update vector dimensions to 768
-    print("[RAG Seeder] Dropping existing lesson_slides table to refresh schema...")
-    try:
-        Base.metadata.drop_all(bind=engine, tables=[LessonSlide.__table__])
-        print("[RAG Seeder] Successfully dropped table lesson_slides.")
-    except Exception as e:
-        print(f"[RAG Seeder] Notice: Dropping table failed (probably does not exist yet): {e}")
-
-    print("[RAG Seeder] Recreating all database tables...")
-    Base.metadata.create_all(bind=engine)
-
-    # 2b. Create the pgvector HNSW cosine index if it does not already exist
-    try:
-        print("[RAG Seeder] Creating HNSW vector cosine index if not exists...")
-        db.execute(text("""
-            CREATE INDEX IF NOT EXISTS lesson_slides_embedding_hnsw_idx
-            ON lesson_slides
-            USING hnsw (embedding vector_cosine_ops);
-        """))
-        db.commit()
-        print("[RAG Seeder] Cosine distance HNSW index successfully validated/created.")
-    except Exception as e:
-        print(f"[RAG Seeder] Notice: HNSW index creation bypassed/failed: {e}")
-        db.rollback()
-
-    # 3. Load the JSON compiled lesson slides
-    json_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lessons_data.json")
-    if not os.path.exists(json_path):
-        print(f"[RAG Seeder] Error: Compiled JSON lessons file not found at: {json_path}")
-        print("Please run `node parse_lessons.js` at the root workspace first!")
-        sys.exit(1)
-
-    with open(json_path, "r", encoding="utf-8") as f:
-        slides = json.load(f)
-
-    print(f"[RAG Seeder] Loaded {len(slides)} slides from JSON file.")
-
-    # 4. Initialize the Direct Google GenAI Client
-    print(f"[RAG Seeder] Initializing direct Google GenAI client ({settings.GEMINI_EMBEDDING_MODEL})...")
-    client = genai.Client(api_key=settings.GEMINI_API_KEY)
-
-    # 5. Seed slides one-by-one with intelligent rate-limit resilience
-    print("[RAG Seeder] Generating embeddings and seeding slides...")
-    
-    total_slides = len(slides)
-    successful_count = 0
-    failed_count = 0
-    skipped_slides = []
-
-    for idx, slide_data in enumerate(slides):
-        print(f"[{idx + 1}/{total_slides}] Generating 768d embedding for slide in Lesson {slide_data['lesson_id']}...")
-        
-        text_body = slide_data["content_text"]
-        if slide_data.get("explanation"):
-            text_body += f"\nExplanation: {slide_data['explanation']}"
-        doc_text = f"title: Lesson {slide_data['lesson_id']} Slide {slide_data['slide_index']} | text: {text_body}"
-
-        # Get embedding vector with up to 5 retries and rate limit handling
-        embedding_val = None
-        for attempt in range(5):
-            try:
-                response = client.models.embed_content(
-                    model=settings.GEMINI_EMBEDDING_MODEL,
-                    contents=doc_text,
-                    config=types.EmbedContentConfig(output_dimensionality=768)
-                )
-                embedding_val = response.embeddings[0].values
-                # 0.75 seconds safety sleep to respect the 100 RPM free-tier limit
-                time.sleep(0.75)
-                break
-
-            except Exception as e:
-                err_msg = str(e).lower()
-                if "429" in err_msg or "quota" in err_msg or "resource_exhausted" in err_msg:
-                    print(f"[Rate Limit] Free-tier limit hit at slide {idx + 1}. Waiting 30s to recover...")
-                    time.sleep(30.0)
-                else:
-                    print(f"[Error] API failed for slide {idx + 1}: {e}. Retrying in 3s...")
-                    time.sleep(3.0)
-
-        # Skip slide on persistent failure (removing zero-vector fallback as requested)
-        if embedding_val is None:
-            failed_count += 1
-            slide_id_str = f"Lesson {slide_data['lesson_id']} Slide {slide_data['slide_index']}"
-            skipped_slides.append(slide_id_str)
-            print(f"[Error] Slide embedding failed persistently after retries. Skipping slide: {slide_id_str}")
-            continue
-
-        successful_count += 1
-
-        # Create and add LessonSlide record
-        slide_record = LessonSlide(
-            lesson_id=slide_data["lesson_id"],
-            slide_index=slide_data["slide_index"],
-            slide_type=slide_data["slide_type"],
-            content_text=slide_data["content_text"],
-            explanation=slide_data["explanation"],
-            embedding=embedding_val
-        )
-        db.add(slide_record)
-        
-        # Commit periodically (every 10 slides) to prevent massive uncommitted states
-        if (idx + 1) % 10 == 0:
-            db.commit()
-            print(f"[RAG Seeder] Committed progress up to slide {idx + 1}.")
-
-    db.commit()
-    
-    print("\n==================================================")
-    print("                SEEDING SUMMARY")
-    print("==================================================")
-    print(f"Total slides processed:  {total_slides}")
-    print(f"Successful embeddings:   {successful_count}")
-    print(f"Failed / Skipped:        {failed_count}")
-    if skipped_slides:
-        print("Skipped Slide IDs:")
-        for skip_id in skipped_slides:
-            print(f"  - {skip_id}")
-    print("==================================================\n")
-    
-    db.close()
-
-
-if __name__ == "__main__":
-    seed_database()
+if __name__ == "__main__": print(backfill(dry_run="--dry-run" in sys.argv))

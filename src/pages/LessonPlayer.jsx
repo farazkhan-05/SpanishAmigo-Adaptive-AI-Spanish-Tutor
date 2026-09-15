@@ -45,10 +45,10 @@ const LessonPlayer = () => {
     };
   }, []);
 
-  const { 
-    currentSlide, 
-    progress, 
-    nextSlide 
+  const {
+    currentSlide,
+    progress,
+    nextSlide
   } = useLessonNavigation(lesson, handleLessonFinish);
 
   useEffect(() => {
@@ -74,8 +74,8 @@ const LessonPlayer = () => {
   };
 
   return (
-    <Box 
-      sx={{ 
+    <Box
+      sx={{
         minHeight: '100vh',
         bgcolor: 'background.default',
         display: 'flex',
@@ -83,8 +83,8 @@ const LessonPlayer = () => {
       }}
     >
       {/* Top Navigation Bar */}
-      <Box 
-        sx={{ 
+      <Box
+        sx={{
           p: 1.5,
           display: 'flex',
           alignItems: 'center',
@@ -95,7 +95,7 @@ const LessonPlayer = () => {
         }}
       >
         {/* Close Button */}
-        <IconButton 
+        <IconButton
           onClick={() => navigate('/')}
           sx={{
             background: '#FFFFFF',
@@ -121,8 +121,8 @@ const LessonPlayer = () => {
 
         {/* Progress Bar */}
         <Box sx={{ flexGrow: 1, position: 'relative' }}>
-          <LinearProgress 
-            variant="determinate" 
+          <LinearProgress
+            variant="determinate"
             value={progress}
           />
           <Typography
@@ -174,9 +174,9 @@ const LessonPlayer = () => {
       </Box>
 
       {/* Main Content */}
-      <Container 
-        maxWidth="sm" 
-        sx={{ 
+      <Container
+        maxWidth="sm"
+        sx={{
           flexGrow: 1,
           display: 'flex',
           alignItems: 'center',

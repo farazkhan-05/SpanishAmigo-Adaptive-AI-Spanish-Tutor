@@ -13,7 +13,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
-  
+
   // Multi-session State
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
@@ -21,7 +21,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
   const [editingSessionId, setEditingSessionId] = useState(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
-  
+
   const messagesEndRef = useRef(null);
   const spanishVoicesRef = useRef([]);
   const previousUidRef = useRef(null);
@@ -69,7 +69,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
 
   const speakText = (text) => {
     if (!window.speechSynthesis || isMuted) return;
-    
+
     window.speechSynthesis.cancel();
     // Remove markdown + emojis/symbol pictographs so TTS reads only meaningful words.
     const cleanText = text
@@ -103,7 +103,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
     const recognition = new SpeechRecognition();
     recognition.lang = 'es-ES';
     recognition.interimResults = false;
-    
+
     recognition.onstart = () => setIsListening(true);
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
@@ -157,9 +157,9 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
       setMessages(history);
     } catch (error) {
       console.error("Error loading session history:", error);
-      setMessages([{ 
-        role: 'model', 
-        text: "¡Lo siento! I'm having trouble loading this conversation. 🔌" 
+      setMessages([{
+        role: 'model',
+        text: "¡Lo siento! I'm having trouble loading this conversation. 🔌"
       }]);
     } finally {
       setIsHistoryLoading(false);
@@ -172,9 +172,9 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
     setIsLoading(false); // Reset active response spinner
     const userName = user?.displayName || user?.email?.split('@')[0] || "Amigo";
     setMessages([
-      { 
-        role: 'model', 
-        text: `¡Hola ${userName}! 👋 Start typing to begin a new conversation. What Spanish vocabulary or grammar would you like to practice today? 🇪🇸` 
+      {
+        role: 'model',
+        text: `¡Hola ${userName}! 👋 Start typing to begin a new conversation. What Spanish vocabulary or grammar would you like to practice today? 🇪🇸`
       }
     ]);
     setIsDrawerOpen(false);
@@ -198,17 +198,17 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
   const handleDeleteSession = async (sessionId, e) => {
     e.stopPropagation();
     if (!window.confirm("Are you sure you want to delete this conversation?")) return;
-    
+
     try {
       const response = await authFetch(`/chat/sessions/${sessionId}`, {
         method: 'DELETE',
         user
       });
       await throwApiError(response, "Failed to delete session");
-      
+
       const updated = sessions.filter(s => s.id !== sessionId);
       setSessions(updated);
-      
+
       if (activeSessionId === sessionId) {
         if (updated.length > 0) {
           bindActiveSessionId(updated[0].id);
@@ -234,7 +234,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
         body: { title: newTitle }
       });
       await throwApiError(response, "Failed to rename session");
-      
+
       const updatedSession = await response.json();
       setSessions(prev => prev.map(s => s.id === sessionId ? updatedSession : s));
       setEditingSessionId(null);
@@ -413,22 +413,22 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
 
             try {
               const parsed = JSON.parse(dataStr);
-              
+
               // 1. Dynamic Session ID Sync
               if (parsed.session_id && parsed.session_id !== activeSessionIdRef.current) {
                 bindActiveSessionId(parsed.session_id);
                 fetchSessions();
               }
-              
+
               // 2. Theme Toggle Action Trigger
               if (parsed.action_required === "TOGGLE_THEME" && typeof onToggleTheme === "function") {
                 onToggleTheme();
               }
-              
+
               // 3. Process Text Token Chunks
               if (parsed.token) {
                 accumulatedReply += parsed.token;
-                
+
                 if (!hasAppendedModelPlaceholder) {
                   // Append placeholder model bubble
                   setMessages(prev => [...prev, { role: 'model', text: accumulatedReply }]);
@@ -533,11 +533,11 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
             }}
           >
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <IconButton 
-                onClick={() => setIsDrawerOpen(!isDrawerOpen)} 
-                size="small" 
-                sx={{ 
-                  color: '#1A1A1A', 
+              <IconButton
+                onClick={() => setIsDrawerOpen(!isDrawerOpen)}
+                size="small"
+                sx={{
+                  color: '#1A1A1A',
                   background: isDrawerOpen ? '#FF6B6B' : 'transparent',
                   border: isDrawerOpen ? '2px solid #1A1A1A' : 'none',
                   borderRadius: '6px',
@@ -562,9 +562,9 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
               <IconButton onClick={() => setIsMuted(!isMuted)} size="small" sx={{ color: '#1A1A1A', mr: 0.5 }}>
                 {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
               </IconButton>
-              <IconButton 
-                onClick={() => setIsOpen(false)} 
-                sx={{ 
+              <IconButton
+                onClick={() => setIsOpen(false)}
+                sx={{
                   color: '#1A1A1A',
                   width: { xs: 36, sm: 28 },
                   height: { xs: 36, sm: 28 },
@@ -576,7 +576,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
           </Box>
 
           <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            
+
             {/* Slide-out History Drawer */}
             <Box
               sx={{
@@ -639,7 +639,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
                   sessions.map((sess) => {
                     const isActive = sess.id === activeSessionId;
                     const isEditing = sess.id === editingSessionId;
-                    
+
                     return (
                       <Box
                         key={sess.id}
@@ -786,9 +786,9 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
                         {msg.role === 'model' ? (
                           <Box sx={{ position: 'relative', pr: 3 }}>
                             <ReactMarkdown>{sanitizeDisplayText(msg.text)}</ReactMarkdown>
-                            <IconButton 
-                              onClick={() => speakText(sanitizeDisplayText(msg.text))} 
-                              size="small" 
+                            <IconButton
+                              onClick={() => speakText(sanitizeDisplayText(msg.text))}
+                              size="small"
                               sx={{ position: 'absolute', top: -8, right: -16, color: '#A0AEC0', '&:hover': { color: '#6C63FF' } }}
                             >
                               <Volume2 size={16} />
@@ -807,12 +807,12 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
                   ))}
                   {isLoading && messages[messages.length - 1]?.role === 'user' && (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                       <Box sx={{ width: 28, height: 28, borderRadius: '8px', background: '#4ECDC4', border: '2px solid #1A1A1A', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1A1A1A', flexShrink: 0 }}>
-                          <Bot size={14} />
-                        </Box>
-                        <Box sx={{ p: 1.5, borderRadius: '10px', background: darkMode ? '#3A3A5C' : '#FFFFFF', border: `2px solid ${darkMode ? '#555' : '#1A1A1A'}`, boxShadow: `2px 2px 0px ${darkMode ? '#000' : '#1A1A1A'}` }}>
-                          <CircularProgress size={14} sx={{ color: '#4ECDC4' }} />
-                        </Box>
+                      <Box sx={{ width: 28, height: 28, borderRadius: '8px', background: '#4ECDC4', border: '2px solid #1A1A1A', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1A1A1A', flexShrink: 0 }}>
+                        <Bot size={14} />
+                      </Box>
+                      <Box sx={{ p: 1.5, borderRadius: '10px', background: darkMode ? '#3A3A5C' : '#FFFFFF', border: `2px solid ${darkMode ? '#555' : '#1A1A1A'}`, boxShadow: `2px 2px 0px ${darkMode ? '#000' : '#1A1A1A'}` }}>
+                        <CircularProgress size={14} sx={{ color: '#4ECDC4' }} />
+                      </Box>
                     </Box>
                   )}
                   <div ref={messagesEndRef} />
@@ -860,11 +860,11 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
                   }
                 }}
               />
-              <IconButton 
-                type="submit" 
+              <IconButton
+                type="submit"
                 disabled={!inputText.trim() || isLoading}
-                sx={{ 
-                  background: '#FF6B6B', 
+                sx={{
+                  background: '#FF6B6B',
                   color: '#FFFFFF',
                   border: '2px solid #1A1A1A',
                   boxShadow: '2px 2px 0px #1A1A1A',

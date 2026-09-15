@@ -51,42 +51,31 @@ function getSkillCategory(skillId) {
 }
 
 function formatSkillTitle(skill) {
-  if (skill.assessment_mode === 'contextual') {
-    if (!skill.display_name.toLowerCase().startsWith('practice')) {
-      return `Practice: ${skill.display_name}`;
-    }
-  }
   return skill.display_name;
 }
 
 function getSkillStatusInfo(skill) {
   if (skill.assessment_mode === 'speech_required') {
     return {
-      label: 'Speaking practice required',
+      label: 'Speaking practice needed',
       color: 'secondary',
-      feedback: 'Speaking practice required during voice exercises.',
+      feedback: 'This can only be checked when you speak.',
     };
   }
   if (skill.assessment_mode === 'contextual') {
     return {
       label: 'Practice activity',
       color: 'info',
-      feedback: skill.last_practiced_at ? 'Practiced in conversational scenario.' : 'Explored through guided conversation.',
+      feedback: skill.last_practiced_at ? 'Practiced in conversation.' : 'Practice in conversation.',
     };
   }
+  const isVocab = skill.skill_id.startsWith('vocabulary.');
   if (typeof skill.mastery_estimate === 'number') {
-    if (skill.mastery_estimate >= 0.85) {
-      return {
-        label: 'Going well',
-        color: 'success',
-        feedback: "You're using this accurately.",
-      };
-    }
     if (skill.mastery_estimate >= 0.70) {
       return {
         label: 'Going well',
         color: 'success',
-        feedback: 'Solid grasp on taught concepts.',
+        feedback: isVocab ? "You're using these words correctly." : "You're using this correctly.",
       };
     }
     if (skill.mastery_estimate >= 0.40) {
@@ -99,18 +88,18 @@ function getSkillStatusInfo(skill) {
     return {
       label: 'Needs practice',
       color: 'warning',
-      feedback: 'You recently had trouble with this.',
+      feedback: 'You had some trouble with this recently.',
     };
   }
   if (skill.status === 'evidence_insufficient') {
     return {
       label: 'Needs practice',
       color: 'warning',
-      feedback: 'Practiced recently — needs more practice.',
+      feedback: 'You had some trouble with this recently.',
     };
   }
   return {
-    label: 'Not assessed yet',
+    label: 'Not enough practice yet',
     color: 'default',
     feedback: 'Practice exercises to build your skill profile.',
   };
@@ -176,7 +165,7 @@ function SkillItemCard({ skill, compact = false }) {
               </Typography>
             ) : (
               <Typography sx={{ fontSize: '0.72rem', color: 'text.secondary', fontWeight: 700 }}>
-                {statusInfo.label === 'Not assessed yet' ? 'Ready to learn' : 'Tracked skill'}
+                {statusInfo.label === 'Not enough practice yet' ? 'Not practiced yet' : 'Tracked skill'}
               </Typography>
             )}
           </Box>
@@ -207,8 +196,8 @@ function SkillItemCard({ skill, compact = false }) {
         <Collapse in={showInfo} unmountOnExit>
           <Box sx={{ mt: 1, p: 1, borderRadius: '8px', backgroundColor: (theme) => theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)' }}>
             <Typography sx={{ fontSize: '0.72rem', color: 'text.secondary', fontWeight: 700 }}>
-              {isContextual && 'Evaluated in guided conversation scenarios with Lumi.'}
-              {isSpeech && 'Requires pronunciation and spoken responses to evaluate.'}
+              {isContextual && 'Practiced through conversation scenarios with Lumi.'}
+              {isSpeech && 'Requires spoken voice practice to check pronunciation.'}
               {!isContextual && !isSpeech && (skill.learning_objective || 'Practiced and assessed through lesson exercises and review activities.')}
             </Typography>
           </Box>
@@ -225,11 +214,11 @@ function ReviewDialog({ review, attempt, onClose, onSubmit, submitting, result, 
 
   const resultMessage = result?.status === 'accepted'
     ? result.result === 'correct'
-      ? 'Great job! Your response was accepted as correct. Your learning state has been updated.'
+      ? 'Great job! Your answer was correct. Your progress has been updated.'
       : result.result === 'incorrect'
-        ? 'Good try! Your response was accepted. We will include this in future practice to help you master it.'
-        : 'Your response was accepted and your learning state has been refreshed.'
-    : result ? 'This answer was recorded, but did not meet the criteria for verified evidence. Try again during future practice.' : null;
+        ? "Good try! We'll include this in future practice to help you master it."
+        : 'Your answer was recorded and your progress has been updated.'
+    : result ? "This answer was recorded. Keep practicing in upcoming lessons and reviews!" : null;
 
   return (
     <Dialog
@@ -276,11 +265,11 @@ function ReviewDialog({ review, attempt, onClose, onSubmit, submitting, result, 
           disabled={submitting || Boolean(result)}
           label="Your answer"
           inputProps={{ maxLength: 2000 }}
-          helperText="Your answer is evaluated after submission."
+          helperText="Type your answer in Spanish."
         />
         {error && <Alert severity="error" sx={{ mt: 2, borderRadius: '10px' }}>{error}</Alert>}
         {resultMessage && (
-          <Alert severity={result.status === 'accepted' ? 'success' : 'warning'} sx={{ mt: 2, borderRadius: '10px' }}>
+          <Alert severity={result.status === 'accepted' ? 'success' : 'info'} sx={{ mt: 2, borderRadius: '10px' }}>
             {resultMessage}
           </Alert>
         )}
@@ -404,15 +393,13 @@ const MySpanishPanel = () => {
     });
   }, [skillsWithEvidence, hasEvidence]);
 
-  // Real "Going Well" skills: solid or high mastery, or completed contextual practice
+  // Real "Going Well" skills: solid or high mastery
   const goingWellSkills = useMemo(() => {
     if (!hasEvidence) return [];
     return skillsWithEvidence.filter((skill) => {
+      if (skill.assessment_mode === 'speech_required' || skill.assessment_mode === 'contextual') return false;
       if (typeof skill.mastery_estimate === 'number') {
         return skill.mastery_estimate >= 0.70;
-      }
-      if (skill.assessment_mode === 'contextual' && skill.last_practiced_at) {
-        return true;
       }
       return false;
     });
@@ -460,7 +447,7 @@ const MySpanishPanel = () => {
               My Spanish
             </Typography>
             <Typography sx={{ fontSize: '.8rem', color: 'text.secondary', fontWeight: 700, mt: 0.25 }}>
-              See what you&apos;re doing well and what to practice next.
+              SpanishAmigo learns from your practice and shows what you&apos;re doing well, what needs more practice, and what to review.
             </Typography>
           </Box>
         </Box>
@@ -494,17 +481,17 @@ const MySpanishPanel = () => {
               {error
                 ? 'Reviews unavailable right now'
                 : due.length > 0
-                  ? `${due.length} ${due.length === 1 ? 'skill ready to review' : 'skills ready to review'}`
+                  ? `${due.length} ${due.length === 1 ? 'thing ready to review' : 'things ready to review'}`
                   : 'Reviews'}
             </Typography>
             <Typography sx={{ fontSize: '.78rem', color: 'text.secondary', fontWeight: 700, mt: 0.25 }}>
               {error
-                ? 'Unable to load due reviews.'
+                ? 'Unable to load reviews.'
                 : due.length > 0
-                  ? 'Keep what you’ve learned fresh with quick spaced reviews.'
+                  ? 'Keep what you’ve learned fresh with quick practice.'
                   : next
                     ? `Nothing to review right now · Next review: ${formatDate(next.due_at)}`
-                    : 'Nothing to review yet'}
+                    : 'Nothing to review yet.'}
             </Typography>
           </Box>
 
@@ -586,7 +573,7 @@ const MySpanishPanel = () => {
                     flexShrink: 0,
                   }}
                 >
-                  {starting === item.review_id ? 'Starting…' : 'Start review'}
+                  {starting === item.review_id ? 'Starting…' : 'Review now'}
                 </Button>
               </Box>
             ))}
@@ -624,10 +611,10 @@ const MySpanishPanel = () => {
             <Sparkles size={22} aria-hidden="true" />
           </Box>
           <Typography component="h3" sx={{ fontWeight: 900, fontSize: '1.05rem' }}>
-            My Spanish is just getting started
+            Your skill profile will appear as you practice.
           </Typography>
           <Typography sx={{ color: 'text.secondary', fontSize: '0.84rem', fontWeight: 700, maxWidth: 460, lineHeight: 1.5 }}>
-            Practice with Lumi or complete lessons. As you answer, SpanishAmigo will learn what you&apos;re comfortable with and what needs more practice.
+            Complete lessons or practice with Lumi to get started.
           </Typography>
           <Button
             variant="outlined"
@@ -646,7 +633,7 @@ const MySpanishPanel = () => {
               backgroundColor: (theme) => theme.palette.mode === 'dark' ? '#1E1E34' : '#FFFFFF',
             }}
           >
-            {showAllSkills ? 'Hide all skills' : `Explore all ${state.length || 14} skills`}
+            {showAllSkills ? 'Hide all skills' : 'Explore all skills'}
           </Button>
         </Box>
       ) : (
@@ -716,7 +703,7 @@ const MySpanishPanel = () => {
                 backgroundColor: (theme) => theme.palette.mode === 'dark' ? '#1E1E34' : '#FFFFFF',
               }}
             >
-              {showAllSkills ? 'Hide all skills' : `Explore all ${state.length || 14} skills`}
+              {showAllSkills ? 'Hide all skills' : 'Explore all skills'}
             </Button>
           </Box>
         </Box>
@@ -728,7 +715,7 @@ const MySpanishPanel = () => {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.75 }}>
             <CheckCircle2 size={16} color="#4ECDC4" aria-hidden="true" />
             <Typography component="h3" sx={{ fontWeight: 900, fontSize: '0.94rem' }}>
-              All curriculum skills ({fullSortedSkills.length})
+              All skills ({fullSortedSkills.length})
             </Typography>
           </Box>
           <Box

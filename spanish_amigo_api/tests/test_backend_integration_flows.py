@@ -7,7 +7,8 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage
-from sqlalchemy import create_engine, delete
+from sqlalchemy import create_engine, delete, event
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost:5432/test")
@@ -16,7 +17,9 @@ os.environ.setdefault("GEMINI_API_KEY", "test-key")
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import get_db
-from app.models import ChatMessage, ChatSession, CompletedLesson, SystemStatus, User
+from app.models import AssessmentEvent, ChatMessage, ChatSession, CompletedLesson, LearnerSkillState, PracticeAttempt, Skill, SystemStatus, User
+from app.curriculum_metadata import SKILLS
+from app.services.adaptive import create_assessment_event, create_practice_attempt, create_unknown_state
 from app.services.ai import save_memory_node
 from app.services.auth import get_current_user
 from main import app
@@ -42,6 +45,9 @@ class TestBackendIntegrationFlows(unittest.TestCase):
             f"sqlite:///{cls.db_path}",
             connect_args={"check_same_thread": False},
         )
+        @event.listens_for(cls.engine, "connect")
+        def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+            dbapi_connection.execute("PRAGMA foreign_keys=ON")
         cls.TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=cls.engine)
 
         # Create only tables needed by these tests.
@@ -49,6 +55,10 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         CompletedLesson.__table__.create(bind=cls.engine, checkfirst=True)
         ChatSession.__table__.create(bind=cls.engine, checkfirst=True)
         ChatMessage.__table__.create(bind=cls.engine, checkfirst=True)
+        Skill.__table__.create(bind=cls.engine, checkfirst=True)
+        LearnerSkillState.__table__.create(bind=cls.engine, checkfirst=True)
+        AssessmentEvent.__table__.create(bind=cls.engine, checkfirst=True)
+        PracticeAttempt.__table__.create(bind=cls.engine, checkfirst=True)
         SystemStatus.__table__.create(bind=cls.engine, checkfirst=True)
 
         def _override_db():
@@ -87,9 +97,14 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         try:
             db.execute(delete(ChatMessage))
             db.execute(delete(ChatSession))
+            db.execute(delete(PracticeAttempt))
+            db.execute(delete(AssessmentEvent))
+            db.execute(delete(LearnerSkillState))
             db.execute(delete(CompletedLesson))
             db.execute(delete(SystemStatus))
+            db.execute(delete(Skill))
             db.execute(delete(User))
+            db.add_all([Skill(skill_id=s.skill_id, display_label=s.display_label, description=s.description, category=s.category, cefr_level=s.cefr_level, difficulty=s.difficulty, learning_objective=s.learning_objective, assessment_mode=s.assessment_mode, taxonomy_version="spanishamigo-v1") for s in SKILLS])
             db.commit()
         finally:
             db.close()
@@ -172,6 +187,89 @@ class TestBackendIntegrationFlows(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["lesson_id"], "1")
+
+    def test_adaptive_state_is_authenticated_tenant_scoped_and_unknown(self):
+        self._seed_user("user-a")
+        self._seed_user("user-b")
+        db = self.TestSessionLocal()
+        try:
+            create_unknown_state(db, "user-b", "grammar.present-tense-tener")
+            db.commit()
+        finally:
+            db.close()
+        self._set_current_user("user-a")
+
+        response = self.client.get("/adaptive/state?skill_id=grammar.present-tense-tener")
+
+        self.assertEqual(response.status_code, 200)
+        item = response.json()[0]
+        self.assertIsNone(item["mastery_estimate"])
+        self.assertEqual(item["status"], "not_assessed")
+        self.assertEqual(item["accepted_evidence_count"], 0)
+
+    def test_adaptive_state_rejects_invalid_skill_and_supports_anonymous_uid(self):
+        self._set_current_user("anonymous-user", provider="anonymous")
+        invalid = self.client.get("/adaptive/state?skill_id=not-a-skill")
+        response = self.client.get("/adaptive/state?skill_id=pronunciation.silent-h")
+        self.assertEqual(invalid.status_code, 422)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()[0]["assessment_mode"], "speech_required")
+
+    def test_adaptive_storage_idempotency_and_contextual_guardrail(self):
+        self._seed_user("user-a")
+        db = self.TestSessionLocal()
+        try:
+            first = create_assessment_event(db, verified_uid="user-a", skill_id="grammar.present-tense-tener", source_type="chat_message", evidence_snapshot="Tengo un boleto.", proposed_result="correct", source_event_key="trusted-message-1")
+            same = create_assessment_event(db, verified_uid="user-a", skill_id="grammar.present-tense-tener", source_type="chat_message", evidence_snapshot="ignored duplicate", proposed_result="correct", source_event_key="trusted-message-1")
+            attempt = create_practice_attempt(db, verified_uid="user-a", skill_id="grammar.present-tense-tener", exercise_type="recall", source_event_key="trusted-attempt-1", learner_response_snapshot="Tengo un boleto.")
+            duplicate_attempt = create_practice_attempt(db, verified_uid="user-a", skill_id="grammar.present-tense-tener", exercise_type="recall", source_event_key="trusted-attempt-1")
+            self.assertEqual(first.id, same.id)
+            self.assertEqual(attempt.id, duplicate_attempt.id)
+            with self.assertRaises(ValueError):
+                create_unknown_state(db, "user-a", "communication.cafe-ordering")
+            db.commit()
+            self.assertEqual(db.query(AssessmentEvent).count(), 1)
+            self.assertEqual(db.query(PracticeAttempt).count(), 1)
+            self.assertIsNone(db.query(LearnerSkillState).first())
+        finally:
+            db.close()
+
+    def test_adaptive_constraints_and_assessment_mode_foundation(self):
+        self._seed_user("user-a")
+        db = self.TestSessionLocal()
+        try:
+            db.add(LearnerSkillState(user_id="user-a", skill_id="grammar.present-tense-tener", mastery_estimate=1.1))
+            with self.assertRaises(IntegrityError):
+                db.flush()
+            db.rollback()
+            with self.assertRaises(ValueError):
+                create_assessment_event(db, verified_uid="user-a", skill_id="grammar.present-tense-tener", source_type="chat_message", evidence_snapshot="", proposed_result="unknown", validation_status="accepted")
+            from app.services.adaptive import mastery_eligibility
+            self.assertTrue(mastery_eligibility("grammar.present-tense-tener", "text"))
+            self.assertFalse(mastery_eligibility("pronunciation.silent-h", "text"))
+            # A vocabulary event stays an event: it creates no whole-domain state row.
+            create_assessment_event(db, verified_uid="user-a", skill_id="vocabulary.dining-basics", source_type="chat_message", evidence_snapshot="agua", proposed_result="correct")
+            db.commit()
+            self.assertIsNone(db.query(LearnerSkillState).filter_by(skill_id="vocabulary.dining-basics").first())
+        finally:
+            db.close()
+
+    def test_chat_deletion_keeps_evidence_snapshot_and_nulls_provenance(self):
+        session_id = self._seed_session_with_messages("user-a")
+        db = self.TestSessionLocal()
+        try:
+            message = db.query(ChatMessage).filter_by(session_id=session_id, role="user").first()
+            assessment = create_assessment_event(db, verified_uid="user-a", skill_id="grammar.present-tense-tener", source_type="chat_message", evidence_snapshot="Tengo un boleto.", proposed_result="correct", chat_session_id=session_id, chat_message_id=message.id)
+            assessment_id = assessment.id
+            db.commit()
+            db.delete(db.get(ChatSession, session_id))
+            db.commit()
+            retained = db.get(AssessmentEvent, assessment_id)
+            self.assertEqual(retained.evidence_snapshot, "Tengo un boleto.")
+            self.assertIsNone(retained.chat_session_id)
+            self.assertIsNone(retained.chat_message_id)
+        finally:
+            db.close()
 
     def test_tenancy_user_a_cannot_access_user_b_chat_history(self):
         session_id = self._seed_session_with_messages("user-b")

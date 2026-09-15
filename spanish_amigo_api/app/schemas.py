@@ -71,3 +71,16 @@ class ExplainResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     
     explanation: str = Field(..., min_length=1)
+
+
+class AdaptiveStateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    skill_id: str = Field(..., min_length=1, max_length=100)
+    display_name: str = Field(..., min_length=1, max_length=160)
+    assessment_mode: str = Field(..., pattern="^(text|speech_required|contextual)$")
+    mastery_estimate: Optional[float] = Field(None, ge=0, le=1)
+    estimate_confidence: Optional[float] = Field(None, ge=0, le=1)
+    accepted_evidence_count: int = Field(..., ge=0)
+    last_practiced_at: Optional[datetime] = None
+    status: str = Field(..., pattern="^(not_assessed|evidence_insufficient|assessed)$")

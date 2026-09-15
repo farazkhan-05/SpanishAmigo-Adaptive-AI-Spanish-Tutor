@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.database import get_db
 from app.logging_setup import configure_logging
-from app.routers import chat, progress
+from app.routers import adaptive, chat, progress
 from app.services.health import check_database_health
 
 settings = get_settings()
@@ -33,6 +33,7 @@ app.add_middleware(
 
 app.include_router(progress.router)
 app.include_router(chat.router)
+app.include_router(adaptive.router)
 
 
 @app.middleware("http")

@@ -1,30 +1,32 @@
 # SpanishAmigo API
 
-FastAPI backend for SpanishAmigo. It powers lesson progress, Lumi chat, AI explanations, chat sessions, adaptive learning state/reviews, Firebase-authenticated user data, and Neon Postgres persistence.
+FastAPI backend for SpanishAmigo. It provides authenticated learner progress, Lumi chat orchestration, contextual curriculum retrieval, and adaptive skill review services backed by PostgreSQL and pgvector.
+
+For complete project architecture and end-to-end setup, see the root [README.md](../README.md).
 
 ## Current Stack
 
 - Python 3.12+
-- FastAPI + Uvicorn
+- FastAPI and Uvicorn
 - SQLAlchemy 2.0 typed ORM
-- Alembic migrations
-- Neon Serverless Postgres
-- Neon `pgvector` for lesson RAG embeddings
-- Google Gemini API
+- Alembic schema migrations
+- Neon Serverless PostgreSQL with `pgvector`
+- Google Gemini API (`gemini-3.1-flash-lite` default, `gemini-embedding-2` embeddings)
 - LangGraph tutor workflow
-- Firebase Admin Auth for bearer-token verification
-- `uv` for dependency and lockfile management
+- Firebase Admin Auth for bearer token verification
+- Free Spaced Repetition Scheduler (`py-fsrs` 6.3.2)
+- `uv` for reproducible dependency and lockfile management
 
 ## Runtime Services
 
 - `GET /health`: Database and service health check.
-- `GET /status`: backward-compatible alias for `/health`.
-- `/progress/*`: protected progress read/write routes.
-- `/chat/send`: protected non-streaming Lumi chat route.
-- `/chat/send_stream`: protected SSE Lumi chat route.
-- `/chat/sessions/*`: protected chat session lifecycle routes.
-- `POST /chat/explain`: public explanation route used by lesson reveal cards.
-- `/adaptive/*`: protected adaptive learning state, review scheduling, and review submission routes.
+- `GET /status`: Backward-compatible alias for `/health`.
+- `/progress/*`: Protected progress read and write routes.
+- `/chat/send`: Protected non-streaming Lumi chat route.
+- `/chat/send_stream`: Protected SSE Lumi chat route.
+- `/chat/sessions/*`: Protected chat session lifecycle routes.
+- `POST /chat/explain`: Public explanation route used by lesson reveal cards.
+- `/adaptive/*`: Protected adaptive learning state, review scheduling, and review submission routes.
 
 Protected routes require:
 
@@ -45,6 +47,7 @@ GEMINI_API_KEY=...
 FIREBASE_PROJECT_ID=spanishamigo-8016a
 ALLOWED_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 AUTH_ALLOW_INSECURE_DEV_TOKENS=true
+ADAPTIVE_V2_PLANNER_ENABLED=false
 LOG_LEVEL=INFO
 ```
 
@@ -58,19 +61,21 @@ ALLOWED_CORS_ORIGINS=https://your-frontend-domain.vercel.app
 AUTH_ALLOW_INSECURE_DEV_TOKENS=false
 DATABASE_URL=postgresql://...
 GEMINI_API_KEY=...
+ADAPTIVE_V2_PLANNER_ENABLED=false
 ```
 
 Important:
 
 - `AUTH_ALLOW_INSECURE_DEV_TOKENS=false` must stay enforced in production.
-- `ALLOWED_CORS_ORIGINS` is comma-separated (e.g. `https://example.vercel.app,http://localhost:5173`).
+- `ALLOWED_CORS_ORIGINS` is comma-separated (for example, `https://example.vercel.app,http://localhost:5173`).
+- `ADAPTIVE_V2_PLANNER_ENABLED` defaults to `false` and is toggled to `true` when activating the Adaptive V2 assessment engine in production.
 
 ## Local Development
 
 ```powershell
 cd spanish_amigo_api
-uv sync
-uv run uvicorn main:app --reload
+uv sync --locked
+uv run --locked uvicorn main:app --reload
 ```
 
 Health check:
@@ -81,54 +86,53 @@ curl http://127.0.0.1:8000/health
 
 ## Migrations
 
-```powershell
-cd spanish_amigo_api
-uv run alembic upgrade head
-```
-
-The backend runs migrations via Alembic:
+Apply database schema migrations via Alembic:
 
 ```powershell
 cd spanish_amigo_api
-uv run alembic upgrade head
+uv run --locked alembic upgrade head
 ```
 
 ## Tests And Quality Gates
 
-Backend tests:
+Backend unit tests:
 
 ```powershell
 cd spanish_amigo_api
-uv run python -m unittest discover -s tests -p "test_*.py"
+uv run --locked python -m unittest discover -s tests -p "test_*.py"
 ```
 
-Targeted type check is configured through:
-
-```text
-mypy.ini
-```
+Targeted type check:
 
 ```powershell
 cd spanish_amigo_api
-uv run --with mypy mypy app/config.py app/services/auth.py app/services/health.py main.py --config-file mypy.ini
+uv run --locked --with mypy mypy app/config.py app/services/auth.py app/services/health.py main.py --config-file mypy.ini
 ```
 
 Dependency audit:
 
 ```powershell
 cd spanish_amigo_api
-uv run --with pip-audit pip-audit --desc
+uv run --locked --with pip-audit pip-audit --desc
 ```
 
-The security workflow also runs frontend production dependency audit from the repo root:
+Frontend production dependency audit from the repository root:
 
 ```powershell
 npm.cmd audit --omit=dev --audit-level=high
 ```
 
+Offline adaptive evaluations:
+
+```powershell
+cd spanish_amigo_api
+uv run --locked python -m evals.run_eval phase7-offline --report evals/reports/phase7-offline.json
+uv run --locked python -m evals.run_eval planner-offline --report evals/reports/phase5-planner.json
+```
+
 ## Anonymous User Rules
 
-The frontend silently creates Firebase anonymous users. The backend treats anonymous UIDs as real users for ownership checks.
+The frontend creates Firebase anonymous users automatically. The backend treats anonymous UIDs as real users for ownership checks.
 
 Current anonymous limits:
 
@@ -138,7 +142,7 @@ Current anonymous limits:
 - The 4th global Lumi message returns `403` with code `ANONYMOUS_CHAT_LIMIT_REACHED`.
 - `Ask Lumi to Explain` remains public, free, and unmetered.
 
-Anonymous chat usage is stored in `SystemStatus` with keys like:
+Anonymous chat usage is stored in `SystemStatus` with keys formatted as:
 
 ```text
 anonymous_chat_usage:<firebase_uid>
@@ -146,17 +150,22 @@ anonymous_chat_usage:<firebase_uid>
 
 ## Deployment
 
-The backend application is containerized with `Dockerfile`:
+The production backend is hosted on Vercel:
+
+- Live URL: `https://spanish-amigo-api.vercel.app`
+- Health endpoint: `https://spanish-amigo-api.vercel.app/health`
+
+The repository also includes a portable `Dockerfile` for containerized environments:
 
 - Python 3.12 slim base image with `uv` for reproducible frozen dependency synchronization (`uv sync --frozen --no-dev`).
 - Uvicorn server running FastAPI on `$PORT` (default 8000).
 - Health check available at `GET /health`.
-- Target runtime database migrations must be applied (`uv run alembic upgrade head`) before traffic is routed.
+- Target runtime database migrations must be applied (`uv run --locked alembic upgrade head`) before traffic is routed.
 
 ## Security Notes
 
 - Firebase ID tokens are verified through Firebase Admin SDK.
-- Progress, chat/session, and adaptive routes enforce Firebase UID tenancy.
+- Progress, chat session, and adaptive routes enforce Firebase UID tenancy.
 - Production uses JSON logs and request IDs.
 - Dependency security is gated by `pip-audit`, `npm audit`, and dependency review.
-- Known remaining hardening item: rate limiting for expensive LLM endpoints.
+- Rate limiting for LLM endpoints remains a recommended operational enhancement.

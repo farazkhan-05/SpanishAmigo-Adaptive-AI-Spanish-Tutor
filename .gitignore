@@ -14,7 +14,8 @@ lerna-debug.log*
 .yarn/unplugged/
 .yarn/build-state.yml
 .yarn/install-state.gz
-.uv-cache/
+.uv-cache*/
+**/.uv-cache*/
 
 node_modules
 dist
@@ -77,8 +78,6 @@ lessons_data.json
 firebase-debug.log*
 firestore-debug.log*
 ui-debug.log*
-spanish_amigo_api/deploy/cloudrun.rendered.yaml
-spanish_amigo_api/deploy/monitoring/*.rendered.json
 
 # Cloud/infra local state
 .gcloud/
@@ -153,6 +152,17 @@ credentials*.json
 *.temp
 *.orig
 *.rej
+
+# Local development tools
+/.antigravity/
+/.gemini/
+/.cursor/
+/.codex/
+/.claude/
+
+# Local authoring references
+/docs/ai-writing-signs.md
+/AGENTS.md
 
 # Allow safe env templates
 !.env.example

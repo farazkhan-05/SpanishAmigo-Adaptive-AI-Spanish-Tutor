@@ -1,7 +1,7 @@
 [project]
 name = "spanish-amigo-api"
 version = "0.1.0"
-description = "Add your description here"
+description = "FastAPI backend for SpanishAmigo, providing authenticated learning progress, Lumi chat, curriculum retrieval, and adaptive review services."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

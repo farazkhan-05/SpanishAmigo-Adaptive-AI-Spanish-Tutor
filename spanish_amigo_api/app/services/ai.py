@@ -111,7 +111,7 @@ class TurnPlan:
 
 
 # ============================================================================
-# MODEL MANAGER — DB-Backed Sync across Cloud Run instances
+# MODEL MANAGER: DB-Backed Sync across multi-instance deployments
 # ============================================================================
 
 class ModelManager:
@@ -120,7 +120,7 @@ class ModelManager:
         self.backup_model: str = str(settings.GEMINI_BACKUP_MODEL)
 
     def get_active_model_name(self, db: Optional[Session] = None) -> str:
-        """Fetch fallback status from database to ensure sync across multi-instance Cloud Run containers."""
+        """Fetch fallback status from database to ensure sync across multi-instance backend deployments."""
         own_db = db is None
         if db is None:
             db = SessionLocal()
@@ -130,7 +130,7 @@ class ModelManager:
                 fallback_time = float(row.value)
                 if time.time() < fallback_time:
                     return self.backup_model
-                # Fallback period has expired — clean it up
+                # Fallback period has expired; clean it up
                 db.delete(row)
                 db.commit()
                 logger.info("⏰ Fallback period expired. Restoring primary model.")

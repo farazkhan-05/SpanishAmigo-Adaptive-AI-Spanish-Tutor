@@ -76,7 +76,7 @@ The curriculum defines 14 stable educational skills across four currently used c
 * **Grammar**: `grammar.gender-agreement`, `grammar.present-tense-querer`, `grammar.present-tense-tener`.
 * **Vocabulary**: `vocabulary.survival-needs`, `vocabulary.dining-basics`, `vocabulary.places-directions`, `vocabulary.cafe-items`.
 
-Across the 5 lessons, 231 lesson slides are mapped to these skills through 382 explicit associations, with 9 slides left intentionally unmapped where content does not test an atomic skill.
+Across the 5 lessons containing 231 total slides, 222 slides participate in skill mappings through 382 explicit associations, with 9 slides left intentionally unmapped where content does not test an atomic skill.
 
 ### The validation boundary and adaptive pathways
 
@@ -155,7 +155,7 @@ Lumi uses contextual curriculum grounding to ensure responses remain aligned wit
 
 1. **Embedding generation**: Lesson slides are vectorized using `gemini-embedding-2`, configured to 768 output dimensions.
 2. **Vector search**: Slides are stored in PostgreSQL using the `pgvector` extension. Cosine distance queries retrieve the top 3 most relevant slides matching the learner's query or current lesson context (distance threshold < 0.65).
-3. **Hybrid retrieval capability**: The repository implements reciprocal rank fusion (RRF, k=60) combining `pgvector` semantic similarity with PostgreSQL full-text search (`tsvector`, `websearch_to_tsquery`, and `ts_rank_cd`).
+3. **Hybrid retrieval capability**: The repository implements reciprocal rank fusion (RRF, k=60) combining `pgvector` semantic similarity with PostgreSQL full-text search (`tsvector`, `websearch_to_tsquery`, and `ts_rank_cd`). Production retrieval operates on the baseline vector search strategy, while hybrid retrieval remains an evaluation-tested capability.
 4. **Prompt orchestration**: Retrieved slide excerpts, conversation history, and learner skill contexts are injected into a LangGraph state graph to generate accurate, level-appropriate explanations.
 
 ## Technology inventory

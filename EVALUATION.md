@@ -29,26 +29,36 @@ Phase 7 C backend fixture evaluation: assessability accuracy/precision/recall/ma
 
 Subsequent to the 2026-09-15 offline evaluation run, operational release gates were executed and verified against live infrastructure:
 
-- **PostgreSQL and pgvector migrations**: Verified against live PostgreSQL; production Neon database upgraded to migration head `c6d7e8f9a0b1`.
-- **Curriculum seeding and idempotency**: Verified in production; 14 skills, 231 slides, and 382 associations seeded with real `gemini-embedding-2` 768-dimensional vectors. Second execution confirmed idempotency (0 inserts, 0 updates, 245 unchanged, 0 failures).
-- **Live Gemini assessment**: Verified in production using `gemini-3.1-flash-lite`, confirming structured assessment proposal generation, deterministic validation acceptance/rejection, and audit event persistence.
+- **PostgreSQL and pgvector migrations**: Verified against live PostgreSQL; production Neon database upgraded to migration head `c6d7e8f9a0b1`. The Adaptive V2 schema defines exact SQLAlchemy tables: `skills`, `lesson_slide_skills`, `lesson_slides`, `learner_skill_states`, `assessment_events`, `practice_attempts`, `review_items`, and `review_history` (with core tables `users`, `completed_lessons`, `chat_sessions`, `chat_messages`, `system_status`).
+- **Curriculum seeding and idempotency**: Verified in production; 14 skills in `skills`, 231 slides in `lesson_slides`, and 382 associations in `lesson_slide_skills` seeded with real `gemini-embedding-2` 768-dimensional vectors. Second execution confirmed idempotency (0 inserts, 0 updates, 245 unchanged, 0 failures).
+- **Live Gemini assessment**: Verified in production using `gemini-3.1-flash-lite`, confirming structured assessment proposal generation, deterministic validation acceptance/rejection, and audit event persistence in `assessment_events`.
 - **Production deployment**: Verified operational on Vercel for both frontend (`https://spanishamigo.vercel.app`) and FastAPI backend (`https://spanish-amigo-api.vercel.app`), with `ADAPTIVE_V2_PLANNER_ENABLED=true` active in production.
-- **Retrieval status**: Curriculum retrieval benchmark measured on 2026-09-16 against live PostgreSQL with `gemini-embedding-2`. Production retrieval remains `B_legacy`; `B_hybrid` showed statistically significant recall degradation and higher latency, confirming `B_legacy` should be preserved.
+- **Retrieval status**: Curriculum retrieval benchmark measured on 2026-09-16 against live PostgreSQL with `gemini-embedding-2`. Production retrieval remains `B_legacy` via `app.services.retrieval.legacy_semantic`; candidate `B_hybrid` via `app.services.retrieval.hybrid` showed statistically distinguishable recall degradation under paired bootstrap analysis and higher retrieval latency, confirming `B_legacy` should be preserved.
 
 ## Curriculum retrieval benchmark (2026-09-16)
 
-The curriculum retrieval benchmark uses a dedicated, human-authored dataset: `evals/retrieval_benchmark.jsonl` (75 cases, SHA-256 `6da7edc2002a455a3c95e68fd837e31310799027e1495698aa6550f8a2e6ad4e`). Cases are distributed equally across all 5 curriculum lessons (15 cases each) and cover 12 query categories (exact grammar, English conceptual, beginner mistakes, conversational, ambiguous, out-of-scope, direct quotes, vocabulary, communicative usage, multi-turn follow-ups, conjugations, and idioms). All expected slide IDs and skill IDs are cross-validated against `lessons_data.json` (231 slides) and `curriculum_metadata.py` (14 skills).
+The curriculum retrieval benchmark uses a dedicated evaluation dataset: `evals/retrieval_benchmark.jsonl` (85 cases total: 75 positive curriculum cases and 10 out-of-scope negative cases; SHA-256 `62be522d7e123517449c5a2959b29aab29375189a21b4836d7f0632db1592c25`). Machine-readable JSON execution reports in `evals/reports/` are intentionally untracked in Git (ignored via `evals/reports/.gitignore`) to maintain clean repository runs; authoritative benchmark evidence, metrics, and methodology are permanently committed here in `EVALUATION.md`.
+
+- **Annotation provenance**: Source-grounded, repository-owned, evaluator-authored, curriculum-validated, not independently human-reviewed.
+- **Positive cases (n=75)**: Distributed equally across all 5 curriculum lessons (15 cases each) covering 12 query categories (direct vocabulary, grammar questions, learner errors, paraphrases, natural conversational, English queries, Spanish production, short ambiguous, cross-lesson, near-neighbour, hard distractor, multi-relevant). Authoritative lesson titles derived directly from `lessons_data.json` and `src/data/lessons/`:
+  - Lesson 1: *The Ultimate Greeting Masterclass*
+  - Lesson 2: *The Magic Verbs (Survival Mode)*
+  - Lesson 3: *Polite & Thirsty (Dining 101)*
+  - Lesson 4: *Where is it? (The GPS Module)*
+  - Lesson 5: *The Ultimate Café Simulation (RPG Mode)*
+  All expected slide IDs (231 slides) and skill IDs (14 skills) are cross-validated against `lessons_data.json` and `curriculum_metadata.py`.
+- **Negative cases (n=10)**: Global out-of-scope queries (programming/database, calculus, biology, geography, sports, medicine, cooking, economics, foreign languages) with `primary_lesson_id = null` and empty relevance sets.
 
 ### Execution commands
 
-Offline verification (no DB or external API access):
+Offline verification (no DB or external API access; runs in ~2.0s):
 ```powershell
 uv run python -m unittest tests.test_retrieval_benchmark
 ```
 
 Live benchmark execution (requires `--confirm-live` to prevent unintentional API/DB quota consumption):
 ```powershell
-uv run python -m evals.run_eval retrieval-benchmark --confirm-live --report evals/reports/retrieval_benchmark.json
+uv run python -m evals.run_eval retrieval-benchmark --variants B_legacy B_hybrid targeted_oracle --confirm-live --report evals/reports/retrieval_benchmark.json
 ```
 
 Smoke test with limit:
@@ -56,25 +66,45 @@ Smoke test with limit:
 uv run python -m evals.run_eval retrieval-benchmark --limit 5 --confirm-live --report evals/reports/retrieval_benchmark_smoke.json
 ```
 
-### Measured benchmark results (75 cases, Neon PostgreSQL, gemini-embedding-2)
+### Measured benchmark results (configured Neon PostgreSQL, gemini-embedding-2)
 
-| Variant | Role | Hit@1 | Hit@3 | Recall@1 | Recall@3 | MRR | Failures (0 hits) | Latency (ms) |
-|---|---|---|---|---|---|---|---|---|
-| `B_legacy` | Baseline (Production) | 0.6533 | 0.8400 | 0.4111 | 0.6467 | 0.7356 | 12/75 | 271.8 |
-| `B_hybrid` | Candidate (Semantic + Lexical RRF) | 0.6400 | 0.8133 | 0.4011 | 0.6000 | 0.7133 | 14/75 | 456.7 |
-| `targeted_oracle` | Experiment (Oracle-conditioned) | 0.6667 | 0.8533 | 0.4178 | 0.6767 | 0.7511 | 11/75 | 248.3 |
+#### Positive Retrieval Metrics (n=75 positive cases)
 
-### Paired bootstrap confidence intervals (B_hybrid vs B_legacy, 1,000 resamples, 95% CI)
+| Variant | Role | Hit@1 | Hit@3 | Recall@1 | Recall@3 | MRR | Failure Count (0 hits) |
+|---|---|---|---|---|---|---|---|
+| `B_legacy` | Baseline (Production, `legacy_semantic`) | 0.6533 | 0.8400 | 0.4111 | 0.6467 | 0.7356 | 12 / 75 |
+| `B_hybrid` | Candidate (Semantic + Lexical RRF, `hybrid`) | 0.6400 | 0.8133 | 0.4011 | 0.6000 | 0.7133 | 14 / 75 |
+| `targeted_oracle` | Experiment (Oracle skill-conditioned) | 0.6667 | 0.8533 | 0.4178 | 0.6767 | 0.7511 | 11 / 75 |
 
-- **Hit@3 delta**: -0.0267 (95% CI [-0.0667, 0.0000], not statistically significant at 95% confidence)
-- **MRR delta**: -0.0222 (95% CI [-0.0578, +0.0133], not statistically significant)
-- **Recall@3 delta**: -0.0467 (95% CI [-0.0933, -0.0133], **statistically significant degradation**, p < 0.05)
+#### Negative Abstention Metrics (n=10 out-of-scope cases)
 
-### Findings and recommendation
+| Variant | Abstention Accuracy (0 slides returned) | False Positive Rate (>=1 slides returned) | Mean Incorrect Slides |
+|---|---|---|---|
+| `B_legacy` | 0.0 (0/10) | 1.0 (10/10) | 3.0 |
+| `B_hybrid` | 0.0 (0/10) | 1.0 (10/10) | 3.0 |
+| `targeted_oracle` | N/A (NOT APPLICABLE)* | N/A (NOT APPLICABLE)* | N/A* |
 
-1. **`B_hybrid` underperforms `B_legacy`**: Lexical full-text search (`to_tsquery('spanish')`) matches common tokens in conversational dialogue examples across unrelated lessons. Unconstrained RRF fusion dilutes semantic relevance, reducing Recall@3 by 4.67 percentage points (p < 0.05) while increasing retrieval latency by ~68% (456.7ms vs 271.8ms).
-2. **`targeted_oracle` provides marginal uplift**: Conditioned retrieval on the oracle skill ID achieves Hit@3 of 0.8533 (+1.33%) and Recall@3 of 0.6767 (+3.00%), but relies on oracle skill identification that is not present in general conversational chat.
-3. **Production recommendation**: Keep `B_legacy` as the authoritative production retrieval strategy. Existing alternatives do not justify a production change.
+*\*Note: `targeted_oracle` is an oracle-conditioned experiment requiring a ground-truth target skill label. For out-of-scope negative cases, no relevant skill exists (oracle conditioning is undefined). Returning zero slides from an empty-skill query is an artifact of empty skill filtering, not evidence that the model can correctly abstain in production. The negative abstention metric is therefore reported as N/A / NOT APPLICABLE.*
+
+#### Benchmark Latency Measurements (sample count n=85)
+
+- **Gemini Query Embedding Duration**: Mean = 715.4 ms (external Gemini API embedding generation).
+- **Database Retrieval Duration (excluding embedding)**:
+  - `B_legacy`: Mean = 166.1 ms
+  - `B_hybrid`: Mean = 272.0 ms (+63.7% latency overhead)
+  - `targeted_oracle`: Mean = 173.6 ms
+
+### Paired bootstrap confidence intervals (B_hybrid vs B_legacy, 1,000 resamples, 95% CI on positive cases n=75)
+
+- **Hit@3 delta**: -0.0267 (95% CI [-0.0667, 0.0000]; interval includes zero on the upper boundary).
+- **MRR delta**: -0.0222 (95% CI [-0.0578, +0.0133]; interval includes zero).
+- **Recall@3 delta**: -0.0467 (95% CI [-0.0933, -0.0133]; **the 95% paired bootstrap confidence interval strictly excludes zero**, demonstrating that the observed recall degradation is statistically distinguishable from zero under this bootstrap interval).
+
+### Empirical findings and production recommendation
+
+1. **`B_hybrid` underperforms `B_legacy`**: Lexical search in `app.services.retrieval.lexical` uses `func.websearch_to_tsquery('simple', query)`. The PostgreSQL `'simple'` dictionary does not stem words or remove stopwords. For multi-word queries, if any unstemmed token is missing, the Boolean `&` tsquery fails. When common tokens match, unconstrained RRF promotes literal matches from unrelated lessons, degrading Recall@3 by 4.67 percentage points while increasing database query duration by ~64% (272.0 ms vs 166.1 ms).
+2. **`targeted_oracle` provides modest upper-bound uplift**: Pre-filtering on the gold skill ID improves Hit@3 by +1.33% and Recall@3 by +3.00% on positive cases. For out-of-scope negative queries, oracle conditioning is undefined (there is no oracle skill label for a true out-of-scope negative query); its negative abstention is therefore reported as N/A / NOT APPLICABLE rather than production-capable abstention. Because oracle skill labels do not exist in general conversational chat, this represents an experimental upper bound, not a deployable production configuration.
+3. **Production recommendation**: Keep `B_legacy` (`legacy_semantic`) as the authoritative production retrieval strategy. Existing alternatives do not justify a production change. Production retrieval in `app/services/ai.py` remains unchanged.
 
 ## Explicit opt-in live/integration evaluation
 

@@ -41,7 +41,7 @@ def embed_query(query: str, client: genai.Client | None = None) -> list[float]:
         contents=f"task: search result | query: {query}",
         config=types.EmbedContentConfig(output_dimensionality=768),
     )
-    return response.embeddings[0].values
+    return [float(v) for v in response.embeddings[0].values]
 
 
 def retrieve_legacy(db: Session, query_vector: list[float]) -> list[str]:

@@ -16,6 +16,7 @@ from .loaders import (
     PHASE7_CASES_PATH,
     RETRIEVAL_BENCHMARK_PATH,
     dataset_sha256,
+    get_authoritative_lesson_titles,
     load_cases,
     load_phase5_cases,
     load_phase7_cases,
@@ -24,8 +25,12 @@ from .loaders import (
 )
 from .metrics import (
     accuracy,
+    abstention_accuracy,
     binary_macro_f1,
+    false_positive_rate,
     hit_rate_at_k,
+    is_correct_abstention,
+    is_false_positive,
     macro_f1,
     mean,
     paired_bootstrap_ci,
@@ -75,7 +80,7 @@ def retrieval_benchmark_report(
 ) -> dict[str, Any]:
     import time
     from urllib.parse import urlparse
-    from sqlalchemy import func, select
+    from sqlalchemy import func, select, text
 
     from app.config import get_settings
     from app.database import SessionLocal
@@ -96,10 +101,13 @@ def retrieval_benchmark_report(
     if limit is not None:
         cases = cases[:limit]
 
+    positive_cases = [c for c in cases if not c.is_negative]
+    negative_cases = [c for c in cases if c.is_negative]
+
     settings = get_settings()
     parsed_db = urlparse(settings.DATABASE_URL)
     db_metadata: dict[str, Any] = {
-        "host": parsed_db.hostname,
+        "host": "configured Neon PostgreSQL curriculum database",
         "database": parsed_db.path.lstrip("/"),
         "environment": settings.ENV,
     }
@@ -110,17 +118,29 @@ def retrieval_benchmark_report(
         skill_count = db.scalar(select(func.count(Skill.skill_id)))
         assoc_count = db.scalar(select(func.count(LessonSlideSkill.lesson_slide_id)))
         embedded_count = db.scalar(select(func.count(LessonSlide.id)).where(LessonSlide.embedding.isnot(None)))
+        pgvector_version = db.execute(text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")).scalar()
         db_metadata.update({
+            "tables": {
+                "curriculum_slides": "lesson_slides",
+                "curriculum_skills": "skills",
+                "slide_skill_associations": "lesson_slide_skills",
+                "learner_states": "learner_skill_states",
+                "assessment_events": "assessment_events",
+                "practice_attempts": "practice_attempts",
+                "review_items": "review_items",
+                "review_history": "review_history",
+            },
             "slide_count": slide_count,
             "skill_count": skill_count,
             "slide_skill_association_count": assoc_count,
             "embedded_slide_count": embedded_count,
+            "pgvector_version": str(pgvector_version) if pgvector_version else "NOT VERIFIED",
         })
 
         per_case_embeddings: dict[str, list[float]] = {}
         embedding_times: list[float] = []
 
-        # 1. Generate one embedding per query
+        # 1. Generate one embedding per query (shared across all variants)
         for case in cases:
             t0 = time.perf_counter()
             vec = embed_query(case.query)
@@ -131,6 +151,7 @@ def retrieval_benchmark_report(
         variant_results: dict[str, Any] = {}
         variant_failures: dict[str, list[dict[str, Any]]] = {}
         per_variant_scores: dict[str, dict[str, list[float]]] = {}
+        per_case_results: dict[str, list[dict[str, Any]]] = {}
 
         for variant in variants:
             is_oracle = (variant == "targeted_oracle")
@@ -144,8 +165,10 @@ def retrieval_benchmark_report(
 
             by_lesson: dict[int, dict[str, list[float]]] = {}
             by_category: dict[str, dict[str, list[float]]] = {}
+            case_records: list[dict[str, Any]] = []
 
-            for case in cases:
+            # 2a. Positive cases evaluation (standard IR metrics: Hit@K, Recall@K, MRR)
+            for case in positive_cases:
                 query_vec = per_case_embeddings[case.id]
                 expected = set(case.expected_relevant_slide_ids)
 
@@ -174,12 +197,24 @@ def retrieval_benchmark_report(
                 mrr_list.append(rr)
 
                 lid = case.primary_lesson_id
-                ls = by_lesson.setdefault(lid, {"h1": [], "h3": [], "r1": [], "r3": [], "mrr": []})
-                ls["h1"].append(h1); ls["h3"].append(h3); ls["r1"].append(r1); ls["r3"].append(r3); ls["mrr"].append(rr)
+                if lid is not None:
+                    ls = by_lesson.setdefault(lid, {"h1": [], "h3": [], "r1": [], "r3": [], "mrr": []})
+                    ls["h1"].append(h1); ls["h3"].append(h3); ls["r1"].append(r1); ls["r3"].append(r3); ls["mrr"].append(rr)
 
                 cat = case.category
                 cs = by_category.setdefault(cat, {"h1": [], "h3": [], "r1": [], "r3": [], "mrr": []})
                 cs["h1"].append(h1); cs["h3"].append(h3); cs["r1"].append(r1); cs["r3"].append(r3); cs["mrr"].append(rr)
+
+                case_records.append({
+                    "case_id": case.id,
+                    "is_negative": False,
+                    "retrieved_slide_ids": observed,
+                    "hit_at_1": h1,
+                    "hit_at_3": h3,
+                    "recall_at_1": r1,
+                    "recall_at_3": r3,
+                    "reciprocal_rank": rr,
+                })
 
                 if not (set(observed) & expected):
                     failures.append({
@@ -192,13 +227,53 @@ def retrieval_benchmark_report(
                         "failure_category": "retrieval_miss",
                     })
 
+            # 2b. Negative cases evaluation (abstention accuracy & false positive rate)
+            neg_observed_list: list[list[str]] = []
+            for case in negative_cases:
+                query_vec = per_case_embeddings[case.id]
+
+                t0 = time.perf_counter()
+                if variant == "B_legacy":
+                    observed = retrieve_legacy(db, query_vec)
+                elif variant == "B_hybrid":
+                    observed = retrieve_hybrid_variant(db, case.query, query_vec)
+                elif variant == "targeted_oracle":
+                    observed = retrieve_targeted_oracle_variant(db, query_vec, "")
+                else:
+                    raise ValueError(f"unknown variant: {variant}")
+                retrieval_times.append((time.perf_counter() - t0) * 1000.0)
+
+                neg_observed_list.append(observed)
+                case_records.append({
+                    "case_id": case.id,
+                    "is_negative": True,
+                    "retrieved_slide_ids": observed,
+                    "correct_abstention": "NOT APPLICABLE" if is_oracle else is_correct_abstention(observed),
+                    "false_positive": "NOT APPLICABLE" if is_oracle else is_false_positive(observed),
+                    "evaluation_note": "oracle_skill_conditioning_undefined_for_negative_query" if is_oracle else None,
+                })
+
+                if not is_oracle and is_false_positive(observed):
+                    failures.append({
+                        "case_id": case.id,
+                        "query": case.query,
+                        "category": case.category,
+                        "expected_relevant_slide_ids": [],
+                        "retrieved_slide_ids": observed,
+                        "incorrect_slide_count": len(observed),
+                        "failure_category": "false_positive_retrieval",
+                    })
+
             per_variant_scores[variant] = {
                 "h1": h1_list, "h3": h3_list, "r1": r1_list, "r3": r3_list, "mrr": mrr_list
             }
             variant_failures[variant] = failures
+            per_case_results[variant] = case_records
 
+            authoritative_titles = get_authoritative_lesson_titles()
             lesson_summary = {
                 str(lid): {
+                    "lesson_title": authoritative_titles.get(lid, f"Lesson {lid}"),
                     "case_count": len(metrics["h3"]),
                     "Hit Rate@1": mean(metrics["h1"]),
                     "Hit Rate@3": mean(metrics["h3"]),
@@ -233,19 +308,34 @@ def retrieval_benchmark_report(
                 "variant": variant,
                 "oracle_conditioned": is_oracle,
                 "comparison_type": comparison_label,
-                "overall_metrics": {
+                "positive_retrieval_metrics": {
+                    "case_count": len(positive_cases),
                     "Hit Rate@1": mean(h1_list),
                     "Hit Rate@3": mean(h3_list),
                     "Recall@1": mean(r1_list),
                     "Recall@3": mean(r3_list),
                     "MRR": mean(mrr_list),
                 },
+                "negative_abstention_metrics": {
+                    "case_count": len(negative_cases),
+                    "abstention_accuracy": "NOT APPLICABLE" if is_oracle else (abstention_accuracy(neg_observed_list) if negative_cases else None),
+                    "false_positive_rate": "NOT APPLICABLE" if is_oracle else (false_positive_rate(neg_observed_list) if negative_cases else None),
+                    "mean_incorrect_slides_returned": "NOT APPLICABLE" if is_oracle else (mean([float(len(r)) for r in neg_observed_list]) if negative_cases else None),
+                    "note": (
+                        "targeted_oracle is an oracle-conditioned experiment requiring a ground-truth target skill. "
+                        "Because out-of-scope negative cases have no relevant skill, oracle conditioning is undefined. "
+                        "Reported as NOT APPLICABLE / N/A rather than production abstention."
+                    ) if is_oracle else (
+                        "Evaluated over global out-of-scope negative cases expecting zero retrieved slides."
+                    ),
+                } if negative_cases else "NO_NEGATIVE_CASES",
                 "lesson_breakdown": lesson_summary,
                 "category_breakdown": category_summary,
                 "failure_count": len(failures),
                 "timing": {
-                    "mean_retrieval_ms": mean(retrieval_times),
+                    "mean_database_retrieval_ms": mean(retrieval_times),
                     "sample_count": len(retrieval_times),
+                    "timing_definition": "database query execution duration only; excludes external Gemini embedding API call",
                 },
             }
 
@@ -255,7 +345,8 @@ def retrieval_benchmark_report(
             hybrid_scores = per_variant_scores["B_hybrid"]
             paired_comparisons["B_hybrid_vs_B_legacy"] = {
                 "fair_comparison": True,
-                "notes": "Same query set, same embeddings, same relevance labels, same top-K, same DB state.",
+                "notes": "Computed strictly over positive retrieval cases (n=75). Same query set, same embeddings, same relevance labels, same top-K, same DB state.",
+                "positive_cases_evaluated": len(positive_cases),
                 "Hit_Rate_at_3_delta": paired_bootstrap_ci(legacy_scores["h3"], hybrid_scores["h3"]),
                 "Recall_at_3_delta": paired_bootstrap_ci(legacy_scores["r3"], hybrid_scores["r3"]),
                 "MRR_delta": paired_bootstrap_ci(legacy_scores["mrr"], hybrid_scores["mrr"]),
@@ -268,16 +359,21 @@ def retrieval_benchmark_report(
             "git_sha": git_sha(),
             "dataset_path": str(cases_path),
             "dataset_sha256": dataset_sha256(cases_path),
-            "case_count": len(cases),
+            "total_case_count": len(cases),
+            "positive_case_count": len(positive_cases),
+            "negative_case_count": len(negative_cases),
+            "annotation_provenance": "source-grounded, repository-owned, evaluator-authored, curriculum-validated, not independently human-reviewed",
             "database_metadata": db_metadata,
             "runtime_configuration": runtime_configuration(),
             "variants_evaluated": variants,
             "metrics_by_variant": variant_results,
             "paired_comparisons": paired_comparisons,
             "failures_by_variant": variant_failures,
+            "per_case_results": per_case_results,
             "timing": {
                 "mean_embedding_generation_ms": mean(embedding_times),
-                "total_cases_timed": len(cases),
+                "sample_count": len(cases),
+                "timing_definition": "Google Gemini embedding API call duration per query",
             },
         }
     finally:

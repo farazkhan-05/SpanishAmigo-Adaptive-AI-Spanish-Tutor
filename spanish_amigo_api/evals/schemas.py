@@ -118,6 +118,7 @@ RETRIEVAL_CATEGORIES = {
     "near_neighbour",
     "hard_distractor",
     "multi_relevant",
+    "out_of_scope_negative",
 }
 
 
@@ -127,11 +128,16 @@ class RetrievalBenchmarkCase:
     id: str
     query: str
     category: str
-    primary_lesson_id: int
+    primary_lesson_id: int | None
     expected_relevant_slide_ids: tuple[str, ...]
     expected_relevant_lesson_ids: tuple[int, ...]
     expected_relevant_skill_ids: tuple[str, ...]
     notes: str
+
+    @property
+    def is_negative(self) -> bool:
+        """Returns True if this is an out-of-scope negative case expecting zero retrieval."""
+        return len(self.expected_relevant_slide_ids) == 0
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "RetrievalBenchmarkCase":
@@ -160,24 +166,48 @@ class RetrievalBenchmarkCase:
             raise CaseValidationError("query must be a non-empty string")
         if not isinstance(raw["category"], str) or raw["category"] not in RETRIEVAL_CATEGORIES:
             raise CaseValidationError(f"category must be one of {sorted(RETRIEVAL_CATEGORIES)}")
-        if not isinstance(raw["primary_lesson_id"], int) or not (1 <= raw["primary_lesson_id"] <= 5):
-            raise CaseValidationError("primary_lesson_id must be an integer between 1 and 5")
+
         slide_ids = raw["expected_relevant_slide_ids"]
-        if not isinstance(slide_ids, list) or not slide_ids:
-            raise CaseValidationError("expected_relevant_slide_ids must be a non-empty list of strings")
+        if not isinstance(slide_ids, list):
+            raise CaseValidationError("expected_relevant_slide_ids must be a list")
         if len(slide_ids) != len(set(slide_ids)):
             raise CaseValidationError("expected_relevant_slide_ids must not contain duplicate slide IDs")
-        for sid in slide_ids:
-            if not isinstance(sid, str) or not sid.startswith("L") or "-S" not in sid:
-                raise CaseValidationError(f"invalid slide ID format: {sid}")
+
         lesson_ids = raw["expected_relevant_lesson_ids"]
-        if not isinstance(lesson_ids, list) or not lesson_ids or not all(isinstance(x, int) and 1 <= x <= 5 for x in lesson_ids):
-            raise CaseValidationError("expected_relevant_lesson_ids must be a non-empty list of integers (1..5)")
+        if not isinstance(lesson_ids, list):
+            raise CaseValidationError("expected_relevant_lesson_ids must be a list")
+
         skill_ids = raw["expected_relevant_skill_ids"]
-        if not isinstance(skill_ids, list) or not all(isinstance(x, str) and x.strip() for x in skill_ids):
-            raise CaseValidationError("expected_relevant_skill_ids must be a list of non-empty strings")
+        if not isinstance(skill_ids, list):
+            raise CaseValidationError("expected_relevant_skill_ids must be a list")
+
         if not isinstance(raw["notes"], str) or not raw["notes"].strip():
             raise CaseValidationError("notes must be a non-empty string")
+
+        # Negative / out-of-scope cases
+        if not slide_ids:
+            if raw["primary_lesson_id"] is not None:
+                raise CaseValidationError("primary_lesson_id must be None for out-of-scope negative cases")
+            if lesson_ids:
+                raise CaseValidationError("expected_relevant_lesson_ids must be empty for negative cases")
+            if skill_ids:
+                raise CaseValidationError("expected_relevant_skill_ids must be empty for negative cases")
+            if raw["category"] != "out_of_scope_negative":
+                raise CaseValidationError("negative cases must have category 'out_of_scope_negative'")
+        else:
+            # Positive retrieval cases
+            if not isinstance(raw["primary_lesson_id"], int) or not (1 <= raw["primary_lesson_id"] <= 5):
+                raise CaseValidationError("primary_lesson_id must be an integer between 1 and 5 for positive cases")
+            if raw["category"] == "out_of_scope_negative":
+                raise CaseValidationError("positive retrieval cases cannot have category 'out_of_scope_negative'")
+            for sid in slide_ids:
+                if not isinstance(sid, str) or not sid.startswith("L") or "-S" not in sid:
+                    raise CaseValidationError(f"invalid slide ID format: {sid}")
+            if not lesson_ids or not all(isinstance(x, int) and 1 <= x <= 5 for x in lesson_ids):
+                raise CaseValidationError("expected_relevant_lesson_ids must be a non-empty list of integers (1..5)")
+            if not skill_ids or not all(isinstance(x, str) and x.strip() for x in skill_ids):
+                raise CaseValidationError("expected_relevant_skill_ids must be a non-empty list of strings")
+
         return cls(
             raw["id"],
             raw["query"],

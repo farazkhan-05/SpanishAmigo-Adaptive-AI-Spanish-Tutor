@@ -4,28 +4,55 @@ from collections.abc import Sequence
 
 
 def recall_at_k(retrieved_ids: list[str], relevant_ids: set[str], k: int) -> float:
+    """Recall@k computed exclusively over positive cases with non-empty relevant_ids."""
     if k <= 0:
         raise ValueError("k must be positive")
     if not relevant_ids:
-        return 0.0
+        raise ValueError("recall_at_k is undefined for empty relevant_ids; use abstention metrics for negative cases")
     return len(set(retrieved_ids[:k]) & relevant_ids) / len(relevant_ids)
 
 
 def hit_rate_at_k(retrieved_ids: list[str], relevant_ids: set[str], k: int) -> float:
-    """Returns 1.0 if at least one relevant ID is present in top-k retrieved results, else 0.0."""
+    """Hit Rate@k computed exclusively over positive cases with non-empty relevant_ids."""
     if k <= 0:
         raise ValueError("k must be positive")
     if not relevant_ids:
-        return 0.0
+        raise ValueError("hit_rate_at_k is undefined for empty relevant_ids; use abstention metrics for negative cases")
     return 1.0 if bool(set(retrieved_ids[:k]) & relevant_ids) else 0.0
 
 
-
 def reciprocal_rank(retrieved_ids: list[str], relevant_ids: set[str]) -> float:
+    """Reciprocal rank computed exclusively over positive cases with non-empty relevant_ids."""
+    if not relevant_ids:
+        raise ValueError("reciprocal_rank is undefined for empty relevant_ids; use abstention metrics for negative cases")
     for position, identifier in enumerate(retrieved_ids, start=1):
         if identifier in relevant_ids:
             return 1.0 / position
     return 0.0
+
+
+def is_correct_abstention(retrieved_ids: list[str]) -> bool:
+    """Returns True if zero slides were retrieved for an out-of-scope/negative query."""
+    return len(retrieved_ids) == 0
+
+
+def is_false_positive(retrieved_ids: list[str]) -> bool:
+    """Returns True if one or more slides were incorrectly retrieved for an out-of-scope query."""
+    return len(retrieved_ids) > 0
+
+
+def abstention_accuracy(retrieved_per_case: Sequence[list[str]]) -> float:
+    """Proportion of out-of-scope cases where the retriever correctly returned zero slides."""
+    if not retrieved_per_case:
+        return 0.0
+    return sum(1.0 for r in retrieved_per_case if is_correct_abstention(r)) / len(retrieved_per_case)
+
+
+def false_positive_rate(retrieved_per_case: Sequence[list[str]]) -> float:
+    """Proportion of out-of-scope cases where the retriever incorrectly returned one or more slides."""
+    if not retrieved_per_case:
+        return 0.0
+    return sum(1.0 for r in retrieved_per_case if is_false_positive(r)) / len(retrieved_per_case)
 
 
 def mean(values: list[float]) -> float | None:
@@ -90,12 +117,20 @@ def paired_bootstrap_ci(
     """Lightweight paired bootstrap confidence interval for difference in metric scores (b - a).
 
     Returns observed mean delta and lower/upper percentile bounds.
-    Distinguishes credible improvement from small noisy metric movement without large dependencies.
+    Evaluates whether the bootstrap confidence interval excludes zero (statistically distinguishable from zero).
+    Note: Computes percentile confidence bounds directly; does not compute an asymptotic p-value.
     """
     if len(scores_a) != len(scores_b):
         raise ValueError("scores_a and scores_b must have equal length")
     if not scores_a or num_resamples <= 0:
-        return {"mean_delta": 0.0, "ci_lower": 0.0, "ci_upper": 0.0, "significant": False, "resamples": 0}
+        return {
+            "mean_delta": 0.0,
+            "ci_lower": 0.0,
+            "ci_upper": 0.0,
+            "ci_excludes_zero": False,
+            "significant": False,
+            "resamples": 0,
+        }
 
     deltas = [b - a for a, b in zip(scores_a, scores_b)]
     n = len(deltas)
@@ -114,8 +149,8 @@ def paired_bootstrap_ci(
 
     ci_lower = boot_means[lower_idx]
     ci_upper = boot_means[upper_idx]
-    # Statistically significant if 0 is outside the confidence interval
-    significant = bool(ci_lower > 0.0 or ci_upper < 0.0)
+    # Distinguishable from zero if 0 is outside the percentile confidence interval
+    ci_excludes_zero = bool(ci_lower > 0.0 or ci_upper < 0.0)
 
     return {
         "mean_delta": round(observed_mean, 4),
@@ -123,5 +158,6 @@ def paired_bootstrap_ci(
         "ci_upper": round(ci_upper, 4),
         "confidence_level": confidence_level,
         "resamples": num_resamples,
-        "significant": significant,
+        "ci_excludes_zero": ci_excludes_zero,
+        "significant": ci_excludes_zero,
     }

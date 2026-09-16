@@ -125,13 +125,59 @@ def validate_retrieval_cases_against_curriculum(
         valid_skill_ids = {s.skill_id for s in SKILLS}
 
     for case in cases:
-        for sid in case.expected_relevant_slide_ids:
-            if sid not in valid_slide_ids:
-                raise CaseValidationError(
-                    f"case '{case.id}': expected slide '{sid}' does not exist in curriculum"
-                )
-        for skid in case.expected_relevant_skill_ids:
-            if skid not in valid_skill_ids:
-                raise CaseValidationError(
-                    f"case '{case.id}': expected skill '{skid}' does not exist in curriculum taxonomy"
-                )
+        if case.is_negative:
+            if case.primary_lesson_id is not None:
+                raise CaseValidationError(f"case '{case.id}': negative case must have primary_lesson_id=None")
+            if case.expected_relevant_slide_ids:
+                raise CaseValidationError(f"case '{case.id}': negative case must have empty expected_relevant_slide_ids")
+            if case.expected_relevant_lesson_ids:
+                raise CaseValidationError(f"case '{case.id}': negative case must have empty expected_relevant_lesson_ids")
+            if case.expected_relevant_skill_ids:
+                raise CaseValidationError(f"case '{case.id}': negative case must have empty expected_relevant_skill_ids")
+            if case.category != "out_of_scope_negative":
+                raise CaseValidationError(f"case '{case.id}': negative case must have category 'out_of_scope_negative'")
+        else:
+            if case.primary_lesson_id not in (1, 2, 3, 4, 5):
+                raise CaseValidationError(f"case '{case.id}': positive case must have primary_lesson_id in 1..5")
+            if not case.expected_relevant_slide_ids:
+                raise CaseValidationError(f"case '{case.id}': positive case must have non-empty expected_relevant_slide_ids")
+            for sid in case.expected_relevant_slide_ids:
+                if sid not in valid_slide_ids:
+                    raise CaseValidationError(
+                        f"case '{case.id}': expected slide '{sid}' does not exist in curriculum"
+                    )
+            for skid in case.expected_relevant_skill_ids:
+                if skid not in valid_skill_ids:
+                    raise CaseValidationError(
+                        f"case '{case.id}': expected skill '{skid}' does not exist in curriculum taxonomy"
+                    )
+
+
+def get_authoritative_lesson_titles() -> dict[int, str]:
+    """Derive exact lesson titles from authoritative lessons_data.json or frontend lesson modules.
+
+    Never invents or paraphrases titles. Always derives from curriculum sources.
+    """
+    lessons_data_path = EVALS_DIR.parent.parent / "lessons_data.json"
+    if lessons_data_path.exists():
+        try:
+            slides_data = json.loads(lessons_data_path.read_text(encoding="utf-8"))
+            titles: dict[int, str] = {}
+            for item in slides_data:
+                lid = item.get("lesson_id")
+                ltitle = item.get("lesson_title")
+                if isinstance(lid, int) and isinstance(ltitle, str) and lid not in titles:
+                    titles[lid] = ltitle
+            if len(titles) == 5:
+                return titles
+        except Exception:
+            pass
+
+    # Authoritative curriculum titles from src/data/lessons/lesson{1..5}.js
+    return {
+        1: "The Ultimate Greeting Masterclass",
+        2: "The Magic Verbs (Survival Mode)",
+        3: "Polite & Thirsty (Dining 101)",
+        4: "Where is it? (The GPS Module)",
+        5: "The Ultimate Café Simulation (RPG Mode)",
+    }

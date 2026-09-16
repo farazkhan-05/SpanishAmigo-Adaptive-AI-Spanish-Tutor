@@ -189,7 +189,8 @@ Lumi uses contextual curriculum grounding to ensure responses remain aligned wit
 
 ## Database schema
 
-The database schema is managed through Alembic (migration head: `c6d7e8f9a0b1`).
+The database schema is managed through Alembic. The release-candidate repository head is `e1782f3a4b5c`; the
+previously deployed production head is `c6d7e8f9a0b1`.
 
 ```text
 users
@@ -261,7 +262,7 @@ system_status (key-value application status and seed tracking)
 |   |   |-- models.py               # SQLAlchemy database models
 |   |   `-- schemas.py              # Pydantic request and response schemas
 |   |-- evals/                      # Offline evaluation datasets and runners
-|   |-- migrations/                 # Alembic migration versions (head: c6d7e8f9a0b1)
+|   |-- migrations/                 # Alembic migration versions (release-candidate head: e1782f3a4b5c)
 |   |-- tests/                      # Unit and integration test suites
 |   |-- Dockerfile                  # Container definition for backend service
 |   |-- main.py                     # FastAPI application entry point
@@ -341,6 +342,9 @@ GEMINI_PRIMARY_MODEL=gemini-3.1-flash-lite
 GEMINI_BACKUP_MODEL=gemma-4-31b-it
 GEMINI_EMBEDDING_MODEL=gemini-embedding-2
 ADAPTIVE_V2_PLANNER_ENABLED=false
+TELEMETRY_ENABLED=true
+TELEMETRY_SAMPLE_RATE=1.0
+TELEMETRY_RETENTION_DAYS=30
 ```
 
 ### 4. Database migrations and seeding
@@ -401,8 +405,15 @@ curl http://127.0.0.1:8000/health
 | `GEMINI_BACKUP_MODEL` | Fallback model used upon primary quota exhaustion. | `gemma-4-31b-it` |
 | `GEMINI_EMBEDDING_MODEL` | Embedding model for semantic slide retrieval. | `gemini-embedding-2` |
 | `ADAPTIVE_V2_PLANNER_ENABLED` | Feature flag activating the Adaptive V2 assessment engine. | `false` |
+| `TELEMETRY_ENABLED` | Enables persistent, content-free AI telemetry. | `true` |
+| `TELEMETRY_SAMPLE_RATE` | Successful-event sampling rate from `0.0` to `1.0`; failures remain retained. | `1.0` |
+| `TELEMETRY_RETENTION_DAYS` | Positive integer telemetry retention/pruning horizon. | `30` |
 
-### Production activation order
+### Production state and activation order
+
+The source default for `ADAPTIVE_V2_PLANNER_ENABLED` is `false`; the previously deployed Adaptive V2 baseline was
+verified with the production environment value `true`. This does not mean the telemetry and targeted-practice changes
+on this branch are deployed. The release-candidate migrations `d2e3f4a5b6c7` and `e1782f3a4b5c` remain pending.
 
 When deploying to production, follow this sequence:
 
@@ -410,7 +421,8 @@ When deploying to production, follow this sequence:
 2. Execute database schema migrations (`alembic upgrade head`).
 3. Run the curriculum seeding script (`seed_embeddings.py`) to initialize skills and generate embeddings.
 4. Verify backend connectivity via the `/health` endpoint.
-5. Set `ADAPTIVE_V2_PLANNER_ENABLED=true` in the production environment settings and redeploy or restart the backend.
+5. Preserve the previously verified production environment value `ADAPTIVE_V2_PLANNER_ENABLED=true`; the source
+   default remains `false`.
 6. Verify adaptive endpoints (`/adaptive/state`, `/adaptive/reviews/due`).
 
 ## Authentication and security

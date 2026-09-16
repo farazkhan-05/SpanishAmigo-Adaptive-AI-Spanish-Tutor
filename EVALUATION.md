@@ -27,13 +27,23 @@ Phase 7 C backend fixture evaluation: assessability accuracy/precision/recall/ma
 
 ## Release verification status
 
+This section distinguishes the previously deployed Adaptive V2 baseline from the current release candidate. The source
+default for `ADAPTIVE_V2_PLANNER_ENABLED` remains `false`, while the previously verified production environment had
+that flag set to `true`. Production retrieval remains `B_legacy`.
+
 Subsequent to the 2026-09-15 offline evaluation run, operational release gates were executed and verified against live infrastructure:
 
-- **PostgreSQL and pgvector migrations**: Verified against live PostgreSQL; production Neon database upgraded to migration head `c6d7e8f9a0b1`. The Adaptive V2 schema defines exact SQLAlchemy tables: `skills`, `lesson_slide_skills`, `lesson_slides`, `learner_skill_states`, `assessment_events`, `practice_attempts`, `review_items`, and `review_history` (with core tables `users`, `completed_lessons`, `chat_sessions`, `chat_messages`, `system_status`).
+- **PostgreSQL and pgvector migrations**: Verified against live PostgreSQL; the previously deployed production Neon database reached head `c6d7e8f9a0b1`.
 - **Curriculum seeding and idempotency**: Verified in production; 14 skills in `skills`, 231 slides in `lesson_slides`, and 382 associations in `lesson_slide_skills` seeded with real `gemini-embedding-2` 768-dimensional vectors. Second execution confirmed idempotency (0 inserts, 0 updates, 245 unchanged, 0 failures).
 - **Live Gemini assessment**: Verified in production using `gemini-3.1-flash-lite`, confirming structured assessment proposal generation, deterministic validation acceptance/rejection, and audit event persistence in `assessment_events`.
 - **Production deployment**: Verified operational on Vercel for both frontend (`https://spanishamigo.vercel.app`) and FastAPI backend (`https://spanish-amigo-api.vercel.app`), with `ADAPTIVE_V2_PLANNER_ENABLED=true` active in production.
 - **Retrieval status**: Curriculum retrieval benchmark measured on 2026-09-16 against live PostgreSQL with `gemini-embedding-2`. Production retrieval remains `B_legacy` via `app.services.retrieval.legacy_semantic`; candidate `B_hybrid` via `app.services.retrieval.hybrid` showed statistically distinguishable recall degradation under paired bootstrap analysis and higher retrieval latency, confirming `B_legacy` should be preserved.
+
+Current release candidate (`feature/final-engineering-upgrade`): repository head is `e1782f3a4b5c`; migrations
+`d2e3f4a5b6c7` and `e1782f3a4b5c` are pending production deployment and have not been run against production. Telemetry
+and targeted practice are implemented in this candidate, but their production deployment and verification are not
+claimed here. After deployment, configure `TELEMETRY_ENABLED=true`, `TELEMETRY_SAMPLE_RATE=1.0`, and
+`TELEMETRY_RETENTION_DAYS=30`.
 
 ## Curriculum retrieval benchmark (2026-09-16)
 

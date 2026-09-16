@@ -6,7 +6,7 @@
 
 Following this audit, mandatory release gates were executed and verified against live infrastructure:
 
-1. **PostgreSQL migration chain verified**: Complete Alembic migration sequence verified against live PostgreSQL and pgvector. The production Neon database successfully reached head migration `c6d7e8f9a0b1`.
+1. **PostgreSQL migration chain verified**: The then-current Adaptive V2 Alembic sequence was verified against live PostgreSQL and pgvector. The previously deployed production Neon database successfully reached head `c6d7e8f9a0b1`; this archival closure does not include later release-candidate migrations `d2e3f4a5b6c7` or `e1782f3a4b5c`.
 2. **Curriculum seeding and idempotency verified**: `seed_embeddings.py` populated 14 skills, 231 lesson slides, and 382 lesson-to-skill associations (222 mapped slides, 9 intentionally unmapped slides) with real 768-dimensional `gemini-embedding-2` vectors. Second execution verified seeder idempotency: 0 inserts, 0 updates, 245 unchanged, 0 regenerated embeddings, and 0 failures.
 3. **Live Gemini structured assessment verified**: Production `/chat/send` verification with `gemini-3.1-flash-lite` confirmed live structured assessment proposal generation, deterministic validation, and audit event persistence. Tested live cases confirmed:
    - Correct production (*"Yo quiero un café, por favor"*) generated an accepted assessment event for `grammar.present-tense-querer`.
@@ -17,6 +17,10 @@ Following this audit, mandatory release gates were executed and verified against
 5. **Adaptive V2 planner activated**: `ADAPTIVE_V2_PLANNER_ENABLED=true` enabled in Vercel production environment; live `/adaptive/state` and `/adaptive/reviews/due` endpoints verified operational.
 6. **Production smoke tests passed**: My Spanish and full course journey verified against live production.
 7. **Retrieval boundary maintained**: Real retrieval quality measurement using a representative labeled production-like PostgreSQL corpus remains NOT RUN. Production retrieval remains `B_legacy`; `B_metadata` and `B_hybrid` remain experiments.
+
+This closure describes the historical Adaptive V2 deployment baseline only. The current `feature/final-engineering-upgrade`
+release candidate has repository head `e1782f3a4b5c`; its telemetry and targeted-practice migrations remain pending
+production deployment and are not covered by the historical production verification above.
 
 ---
 
@@ -69,7 +73,7 @@ READY TO MERGE: **NO**.
 
 READY TO ENABLE `ADAPTIVE_V2` IN PRODUCTION: **CONDITIONAL**.
 
-Before merge/activation, run the complete Alembic chain on a verified disposable PostgreSQL + pgvector instance (upgrade, schema/constraint/index checks, downgrade, re-upgrade), execute the non-destructive seed idempotency/rollback checks there, and perform the documented five-case controlled Gemini smoke test. Re-run frontend build from the remediated lockfile installation. Keep `ADAPTIVE_V2_PLANNER_ENABLED=false` until these gates are recorded. Production retrieval must remain `B_legacy` unless a real labeled retrieval measurement supports changing it.
+Before merge/activation of that historical baseline, run the complete Alembic chain on a verified disposable PostgreSQL + pgvector instance (upgrade, schema/constraint/index checks, downgrade, re-upgrade), execute the non-destructive seed idempotency/rollback checks there, and perform the documented five-case controlled Gemini smoke test. The historical source default was `ADAPTIVE_V2_PLANNER_ENABLED=false`; subsequent production verification recorded the deployed environment value as `true`. Production retrieval must remain `B_legacy` unless a real labeled retrieval measurement supports changing it.
 
 Remaining risks are unverified PostgreSQL-specific migration behavior, no real retrieval measurement, no live Gemini structured-output check, and an unestablished backend deployment/migration operator. The deployment must run Alembic to head before enabling adaptive routes; old schema should fail requests rather than silently mutate learner state.
 

@@ -48,6 +48,9 @@ FIREBASE_PROJECT_ID=spanishamigo-8016a
 ALLOWED_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 AUTH_ALLOW_INSECURE_DEV_TOKENS=true
 ADAPTIVE_V2_PLANNER_ENABLED=false
+TELEMETRY_ENABLED=true
+TELEMETRY_SAMPLE_RATE=1.0
+TELEMETRY_RETENTION_DAYS=30
 LOG_LEVEL=INFO
 ```
 
@@ -62,13 +65,18 @@ AUTH_ALLOW_INSECURE_DEV_TOKENS=false
 DATABASE_URL=postgresql://...
 GEMINI_API_KEY=...
 ADAPTIVE_V2_PLANNER_ENABLED=false
+TELEMETRY_ENABLED=true
+TELEMETRY_SAMPLE_RATE=1.0
+TELEMETRY_RETENTION_DAYS=30
 ```
 
 Important:
 
 - `AUTH_ALLOW_INSECURE_DEV_TOKENS=false` must stay enforced in production.
 - `ALLOWED_CORS_ORIGINS` is comma-separated (for example, `https://example.vercel.app,http://localhost:5173`).
-- `ADAPTIVE_V2_PLANNER_ENABLED` defaults to `false` and is toggled to `true` when activating the Adaptive V2 assessment engine in production.
+- `ADAPTIVE_V2_PLANNER_ENABLED` defaults to `false`; the previously deployed Adaptive V2 production baseline was verified with the environment value `true`.
+- The current release candidate adds migrations `d2e3f4a5b6c7` and `e1782f3a4b5c`, which remain pending production deployment after merge.
+- `TELEMETRY_ENABLED` is a boolean, `TELEMETRY_SAMPLE_RATE` is a float from `0` to `1` for successful-event sampling (failures remain retained), and `TELEMETRY_RETENTION_DAYS` is a positive integer pruning horizon.
 
 ## Local Development
 

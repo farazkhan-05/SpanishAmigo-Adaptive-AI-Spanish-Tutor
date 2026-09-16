@@ -22,8 +22,8 @@ flowchart TD
     Orch["LangGraph Tutor Engine"]
     LLM["Google Gemini (gemini-3.1-flash-lite)"]
     Embed["Google Gemini Embeddings (gemini-embedding-2)"]
-    Validator["Deterministic Assessment Validator"]
-    FSRS["FSRS Spaced Repetition Engine"]
+    Validator["Deterministic Validator"]
+    FSRS["FSRS Review Engine"]
 
     Client -->|"ID Token"| Auth
     Client -->|"REST / SSE Streaming"| API
@@ -33,10 +33,10 @@ flowchart TD
     Orch -->|"Slide Embeddings / Search"| DB
     Orch -->|"Contextual Chat / Assessment Proposals"| LLM
     Embed -->|"768-dim Vectors"| DB
-    LLM -->|"Structured Proposals"| Validator
-    Validator -->|"Validated Evidence Events"| DB
-    Validator -->|"State Mutation & Scheduling"| FSRS
-    FSRS -->|"Due Reviews & Mastery Estimates"| DB
+    LLM -->|"Proposals"| Validator
+    Validator -->|"Assessment Events (Audit / Policy)"| DB
+    API -->|"Review Submissions & Practice"| FSRS
+    FSRS -->|"Learner States & Review Cards"| DB
     DB -->|"Adaptive Skill Metrics"| API
     API -->|"My Spanish Dashboard"| Client
 ```
@@ -47,7 +47,7 @@ The system components interact as follows:
 2. **Authentication**: Firebase Authentication manages anonymous guest sessions and Google account linking. ID tokens are passed in HTTP request authorization headers.
 3. **Backend API**: FastAPI validates request payloads with Pydantic, verifies user identity against Firebase Admin SDK, and routes requests to database services or the LangGraph AI engine.
 4. **Retrieval and vector search**: PostgreSQL with the `pgvector` extension stores 768-dimensional embeddings of all curriculum lesson slides. Queries retrieve relevant lesson content to ground tutor responses in taught material.
-5. **Adaptive skill evaluation**: When a learner interacts with Lumi or completes exercises, Gemini proposes structured assessment events. A deterministic validator enforces pedagogical rules before persisting accepted evidence and updating FSRS review schedules.
+5. **Adaptive skill evaluation**: When a learner interacts with Lumi, Gemini proposes structured assessment events that a deterministic validator checks before recording audit events in the database to guide pedagogical decisions. For server-issued review exercises, accepted eligible practice attempts execute deterministic state transitions that update learner skill states and FSRS review schedules.
 
 ## Learner experience
 
@@ -69,7 +69,7 @@ SpanishAmigo implements an adaptive tracking architecture (Adaptive V2) that sep
 
 ### Core curriculum taxonomy
 
-The curriculum defines 14 stable educational skills across five categories:
+The curriculum defines 14 stable educational skills across four currently used categories:
 
 * **Pronunciation**: `pronunciation.silent-h` (speech required).
 * **Communication**: `communication.greetings`, `communication.formal-informal-address`, `communication.introductions-farewells`, `communication.politeness`, `communication.asking-directions`, `communication.cafe-ordering` (contextual).
@@ -78,57 +78,76 @@ The curriculum defines 14 stable educational skills across five categories:
 
 Across the 5 lessons, 231 lesson slides are mapped to these skills through 382 explicit associations, with 9 slides left intentionally unmapped where content does not test an atomic skill.
 
-### The validation boundary
+### The validation boundary and adaptive pathways
 
-A foundational architectural rule governs skill mastery: **the language model may propose an assessment, but application code decides whether that proposal is valid evidence.**
+A foundational architectural rule governs skill mastery: **the language model may propose an assessment, but application code decides whether that proposal is valid evidence, and only eligible practice attempts can mutate mastery state.**
 
 ```text
-Learner Message / Exercise Response
-         |
-         v
-Gemini Assessment Proposal (gemini-3.1-flash-lite)
-[proposed_result, error_type, proposal_confidence, evidence_span]
-         |
-         v
-Deterministic Application Validator
-  - Assessability gating (filters questions, chatter, and requests)
-  - Modality rules (requires audio evidence for pronunciation)
-  - Contextual constraints (prevents scenario tags from claiming atomic mastery)
-  - Confidence threshold verification (minimum 0.80 confidence)
-  - Vocabulary bounds checks (guards against broad vocabulary hallucinations)
-         |
-  +------+------+
-  |             |
-[Accepted]  [Rejected / Invalid / Low Confidence]
-  |             |
-  v             v
-Persisted to   Logged in assessment_events without
-learner state  modifying mastery or FSRS schedules
+Conversational Assessment Flow (Path A):
+Learner Chat Turn -> Assessability Gate -> Gemini Proposal -> Deterministic Validator
+                                                                   |
+                            +--------------------------------------+--------------------------------------+
+                            |                                                                             |
+                        [Accepted]                                                        [Rejected / Invalid / Low Confidence]
+                            |                                                                             |
+                            v                                                                             v
+          Persisted to assessment_events as audit evidence              Persisted to assessment_events for audit logging;
+          and active pedagogical signal; does NOT mutate                no pedagogical action or state mutation
+          learner skill states or schedule FSRS reviews
+
+Eligible Practice and Review Flow (Path B):
+Server-Issued Review Practice -> Learner Submission -> Validator Acceptance -> Eligible PracticeAttempt
+                                                                                      |
+                                                                                      v
+                                                                          process_accepted_evidence
+                                                                                      |
+                                            +-----------------------------------------+-----------------------------------------+
+                                            |                                                                                   |
+                                            v                                                                                   v
+                              LearnerSkillState Mutation                                                             FSRS ReviewItem & History
+                             (mastery estimate & confidence)                                                       (stability, difficulty, due date)
 ```
+
+The system strictly distinguishes between two processing paths:
+
+* **Path A: Conversational assessment**: During live chat with Lumi, learner messages pass through an assessability gate. If assessable Spanish production is present, Gemini proposes an assessment that is verified by the deterministic validator. Accepted outcomes are persisted to `assessment_events` as audit evidence and inform Lumi's pedagogical policy (such as providing explanations, hints, or practice prompts). Chat assessments do not create `practice_attempts` and do not modify `learner_skill_states` or FSRS review cards.
+* **Path B: Eligible practice and review evidence**: State mutation and spaced repetition scheduling require an explicit, eligible `PracticeAttempt`. When a learner submits an answer to a server-issued review exercise, the submission undergoes the same deterministic validation. If accepted, `process_accepted_evidence` transactionally updates `learner_skill_states` (computing mastery estimates and confidence), calculates FSRS card stability and difficulty, updates `review_items`, and records an immutable log in `review_history`.
+
+### Mastery eligibility rules
+
+To prevent invalid state updates, `process_accepted_evidence` and the deterministic validator enforce strict eligibility constraints:
+
+* **Active practice requirement**: State mutation requires an eligible `PracticeAttempt` with active recall (`support_level != "exposure"`).
+* **Modality constraints**: Skills flagged as `speech_required` (such as `pronunciation.silent-h`) cannot gain text mastery from typed responses.
+* **Non-atomic skill constraints**: Contextual transfer skills (such as `communication.cafe-ordering`) represent scenario integration rather than atomic mastery and do not mutate numeric mastery states.
+* **Vocabulary domain boundaries**: Broad vocabulary category skills are rejected for atomic text mastery in the validator.
 
 ### Safety and validation examples
 
-1. **Grounded grammar demonstration**:
+1. **Conversational grammar demonstration**:
    * Input: *"Yo quiero un café, por favor."*
-   * Result: Validated and accepted as positive evidence for `grammar.present-tense-querer`.
-2. **Grounded grammar mistake**:
+   * Result: Validated and recorded as an accepted assessment event for `grammar.present-tense-querer`, providing a pedagogical signal in chat without mutating learner mastery state.
+2. **Conversational grammar mistake**:
    * Input: *"Yo tener dos hermanos."*
-   * Result: Validated and accepted as incorrect evidence for `grammar.present-tense-tener`, updating review urgency.
-3. **Information request**:
+   * Result: Validated and recorded as an accepted incorrect assessment event for `grammar.present-tense-tener`, informing Lumi's response without directly modifying skill mastery or review queues.
+3. **Server-issued review practice**:
+   * Input: Learner submits *"Yo tengo dos hermanos."* in response to a server-issued review prompt for `grammar.present-tense-tener`.
+   * Result: Validated with an eligible `PracticeAttempt`, triggering `process_accepted_evidence` to update the learner skill state and advance the FSRS review schedule.
+4. **Information request**:
    * Input: *"Why do we say buenos días instead of buenas días?"*
-   * Result: Identified as a question by the assessability gate. It is answered by Lumi but discarded from mastery calculations.
-4. **Modality gating**:
+   * Result: Identified as a question by the assessability gate. It is answered by Lumi but excluded from assessment proposals and mastery tracking.
+5. **Modality gating**:
    * Input: Learner types text explaining that the letter H is silent.
-   * Result: Rejected for `pronunciation.silent-h` because pronunciation skills strictly require speech audio evidence.
+   * Result: Rejected for `pronunciation.silent-h` because pronunciation skills require speech audio evidence.
 
 ### Spaced repetition and "My Spanish"
 
-* **FSRS scheduling**: Validated evidence feeds into the Free Spaced Repetition Scheduler (`py-fsrs` 6.3.2), which computes card stability, difficulty, and target review dates.
-* **Review queue**: Due reviews are surfaced through dedicated endpoints (`/adaptive/reviews/due` and `/adaptive/reviews/next`), providing server-generated recall prompts.
+* **FSRS scheduling**: Validated review submissions feed into the Free Spaced Repetition Scheduler (`py-fsrs` 6.3.2), which computes card stability, difficulty, and next due review timestamps upon completing server-issued exercises.
+* **Review queue**: Due reviews are surfaced through dedicated endpoints (`/adaptive/reviews/due` and `/adaptive/reviews/next`), issuing taxonomy-grounded recall prompts (`/adaptive/reviews/{id}/start`) and evaluating submissions (`/adaptive/reviews/{id}/submit`).
 * **My Spanish panel**: A dedicated dashboard organizing the 14 curriculum skills into actionable categories:
-  * *Needs practice*: Skills with low mastery estimates or overdue spaced repetition reviews.
-  * *Going well*: Skills with high stability and demonstrated recall.
-  * *Not assessed*: Skills where the learner has not yet produced sufficient validated evidence.
+  * *Needs practice*: Assessed skills with low mastery estimates or overdue spaced repetition reviews.
+  * *Going well*: Assessed skills with high stability and demonstrated recall.
+  * *Not assessed*: Skills where the learner has not yet completed validated practice attempts.
 
 ## Retrieval-augmented generation (RAG)
 

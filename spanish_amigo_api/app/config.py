@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     # Model Configuration
-    GEMINI_PRIMARY_MODEL: str = "gemini-3.1-flash-lite"
+    GEMINI_PRIMARY_MODEL: str = "gemini-3.5-flash-lite"
     GEMINI_BACKUP_MODEL: str = "gemma-4-31b-it"
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-2"
     # Phase 5 observes and plans but never mutates mastery. Conservative rollout

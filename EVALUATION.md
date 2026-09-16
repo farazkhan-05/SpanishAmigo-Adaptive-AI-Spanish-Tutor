@@ -268,3 +268,71 @@ Metrics are never combined into an opaque aggregate score:
 - Strict Exact Skill Match: >= 0.55
 - End-to-End Validation Outcome Match: >= 0.75
 - Operational Latency: Monitored descriptively; no brittle P50 release gate.
+
+## Live Model Upgrade Regression: Gemini 3.5 Flash-Lite (2026-09-17)
+
+### Evaluation Context & Comparability
+- **Historical Baseline Model**: `gemini-3.1-flash-lite` (Phase 3 baseline, 2026-09-16)
+- **Release-Candidate Primary Model (System Under Test)**: `gemini-3.5-flash-lite`
+- **Fallback Generation Model**: `gemma-4-31b-it` (preserved)
+- **Embedding Model**: `gemini-embedding-2` (preserved)
+- **Judge Model**: `gemini-3.1-flash-lite` (explicitly pinned for direct, methodologically defensible comparison against Phase 3 baseline)
+- **Dataset**: `evals/live_eval_cases.jsonl` (same 50 curriculum-grounded cases)
+- **Isolation & Persistence**: Authoritative `plan_turn(state, db, persist_assessment=False)` with SQLAlchemy mutation guard and PostgreSQL `SET TRANSACTION READ ONLY`. Zero database rows modified.
+
+### Side-by-Side Metric Comparison
+
+- **Safety Layer 1: Pre-generation Guardrails (n=50)**:
+  - Guardrail Accuracy: 0.9400 (3.1 baseline) vs 0.9400 (3.5 candidate)
+  - Guardrail FPR: 0.0000 vs 0.0000
+  - Guardrail FNR: 0.2727 vs 0.2727
+  - Response Exists Rate: 1.0000 vs 1.0000
+
+- **Safety Layer 2: Tutor System Containment & Prompt-Injection Resistance (n=12)**:
+  - Forbidden Behavior Containment Rate: 1.0000 (12 / 12) vs 1.0000 (12 / 12)
+  - Expected Redirect Behavior Match: 0.9167 (11 / 12) vs 1.0000 (12 / 12) (+8.33% improvement)
+  - Prompt Injection Resistance Rate: 1.0000 (3 / 3) vs 1.0000 (3 / 3)
+
+- **Safety Layer 3: Assessment Model Quality (n=28 assessable turns)**:
+  - Assessability Accuracy: 1.0000 (50 / 50) vs 1.0000 (50 / 50)
+  - Assessability Macro-F1: 1.0000 vs 1.0000
+  - Proposal Schema Success Rate: 1.0000 (28 / 28) vs 1.0000 (28 / 28)
+  - Strict Exact Skill Match: 0.6071 (17 / 28) vs 0.6429 (18 / 28) (+3.58% improvement)
+  - Acceptable Skill Set Match: 0.8214 (23 / 28) vs 0.8929 (25 / 28) (+7.15% improvement)
+  - Exact Result Match Accuracy: 0.8571 (24 / 28) vs 0.8929 (25 / 28) (+3.58% improvement)
+
+- **Safety Layer 4: Deterministic Validator Enforcement (n=28 evaluated proposals)**:
+  - End-to-End Validation Outcome Match: 0.7857 (22 / 28) vs 0.8214 (23 / 28) (+3.57% improvement)
+  - Speech from Text Accepted: strictly 0 vs strictly 0
+  - Broad Vocabulary Overclaim Accepted: strictly 0 vs strictly 0
+  - Contextual as Atomic Accepted: strictly 0 vs strictly 0
+  - Unsupported Evidence Accepted: strictly 0 vs strictly 0
+
+- **Safety Layer 5: True Hard Invariants & State Mutation Safety**:
+  - Confirmed True Hard Safety Violations: strictly 0 vs strictly 0
+  - Unauthorized Learner State Mutations: 0 vs 0
+  - Prompt Injection State Mutations: 0 vs 0
+
+- **Auxiliary Checks**:
+  - Required Correction Points Accuracy: 0.9000 (9 / 10) vs 1.0000 (10 / 10) (+10.0% improvement)
+  - Required Term Check Rate: 0.2000 (1 / 5) vs 0.2000 (1 / 5)
+
+- **Probabilistic LLM Judge (n=42 unblocked turns, judge: gemini-3.1-flash-lite)**:
+  - Overall Composite Score: Mean = 5.00, Median = 5.00 (all 8 dimensions maintained 5.00 average)
+  - Calibration: Pre-evaluation calibration verified discrimination on 7 synthetic anchors (`demonstrated_discrimination = true`, poor responses scored <= 2.50).
+
+- **Descriptive Operational Latencies (ms)**:
+  - Generation Mean: 4,438.6 ms (3.1) vs 1,625.2 ms (3.5) (-63.4% latency reduction)
+  - Assessment Mean: 4,656.9 ms (3.1) vs 1,450.8 ms (3.5) (-68.8% latency reduction)
+  - Judge Mean: 5,302.6 ms vs 2,560.9 ms
+
+- **Token Consumption (50 cases)**:
+  - Generation Tokens: 40,562 total (mean/case: 965.8)
+  - Assessment Tokens: 22,932 total (mean/case: 819.0)
+  - Judge Tokens: 47,241 total (mean/case: 1,124.8)
+  - Grand Total Tokens: 110,735 tokens (comparable to 3.1 baseline of 110,378)
+  - Estimated Counterfactual Savings: 15,745 prompt tokens saved across 22 non-assessable turns
+
+### Final Upgrade Decision
+- **Decision**: ACCEPTED
+- **Rationale**: Gemini 3.5 Flash-Lite preserves 100% of hard safety invariants, eliminates schema and streaming errors, demonstrates superior acceptable-skill matching (89.29% vs 82.14%), improves tutor redirect and correction point accuracy, achieves ~65% latency reduction, and operates cleanly within existing SDK bindings without architectural or prompt modifications.

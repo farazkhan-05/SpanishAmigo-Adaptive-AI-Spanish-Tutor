@@ -20,7 +20,7 @@ flowchart TD
     API["FastAPI Backend (Vercel)"]
     DB[("Neon PostgreSQL 18 + pgvector")]
     Orch["LangGraph Tutor Engine"]
-    LLM["Google Gemini (gemini-3.1-flash-lite)"]
+    LLM["Google Gemini (gemini-3.5-flash-lite)"]
     Embed["Google Gemini Embeddings (gemini-embedding-2)"]
     Validator["Deterministic Validator"]
     FSRS["FSRS Review Engine"]
@@ -174,7 +174,7 @@ Lumi uses contextual curriculum grounding to ensure responses remain aligned wit
 * **psycopg 3**: PostgreSQL database adapter.
 * **Firebase Admin SDK**: Server-side cryptographic token verification.
 * **LangChain & LangGraph**: AI agent orchestration, tool routing, state graphs, and memory management.
-* **Google GenAI SDK & langchain-google-genai**: Model access for `gemini-3.1-flash-lite` and `gemini-embedding-2`.
+* **Google GenAI SDK & langchain-google-genai**: Model access for `gemini-3.5-flash-lite` and `gemini-embedding-2`.
 * **py-fsrs**: Implementation of the Free Spaced Repetition Scheduler algorithm.
 
 ### Infrastructure and tooling
@@ -338,7 +338,7 @@ FIREBASE_PROJECT_ID=your_firebase_project_id
 ALLOWED_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 AUTH_ALLOW_INSECURE_DEV_TOKENS=false
 LOG_LEVEL=INFO
-GEMINI_PRIMARY_MODEL=gemini-3.1-flash-lite
+GEMINI_PRIMARY_MODEL=gemini-3.5-flash-lite
 GEMINI_BACKUP_MODEL=gemma-4-31b-it
 GEMINI_EMBEDDING_MODEL=gemini-embedding-2
 ADAPTIVE_V2_PLANNER_ENABLED=false
@@ -401,7 +401,7 @@ curl http://127.0.0.1:8000/health
 | `ALLOWED_CORS_ORIGINS` | Comma-separated list of allowed client origins. | `http://localhost:5173,http://127.0.0.1:5173` |
 | `AUTH_ALLOW_INSECURE_DEV_TOKENS` | Permits mock authentication tokens for test suites. | `false` |
 | `LOG_LEVEL` | Application logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). | `INFO` |
-| `GEMINI_PRIMARY_MODEL` | Primary model for conversational tutoring and assessment. | `gemini-3.1-flash-lite` |
+| `GEMINI_PRIMARY_MODEL` | Primary model for conversational tutoring and assessment. | `gemini-3.5-flash-lite` |
 | `GEMINI_BACKUP_MODEL` | Fallback model used upon primary quota exhaustion. | `gemma-4-31b-it` |
 | `GEMINI_EMBEDDING_MODEL` | Embedding model for semantic slide retrieval. | `gemini-embedding-2` |
 | `ADAPTIVE_V2_PLANNER_ENABLED` | Feature flag activating the Adaptive V2 assessment engine. | `false` |

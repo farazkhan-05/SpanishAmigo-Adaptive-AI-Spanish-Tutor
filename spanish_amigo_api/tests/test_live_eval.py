@@ -222,7 +222,7 @@ class LiveEvalNoPersistSeamTests(unittest.TestCase):
             evidence="Yo quiero un café",
             assessment_version="phase5-v1",
         )
-        mock_propose.return_value = (mock_proposal, "gemini-3.1-flash-lite", {"total_tokens": 50})
+        mock_propose.return_value = (mock_proposal, "gemini-3.5-flash-lite", {"total_tokens": 50})
 
         state = {
             "messages": [MagicMock(content="Yo quiero un café.")],
@@ -262,7 +262,7 @@ class LiveEvalNoPersistSeamTests(unittest.TestCase):
             evidence="Yo quiero un café",
             assessment_version="phase5-v1",
         )
-        mock_propose.return_value = (mock_proposal, "gemini-3.1-flash-lite", {"total_tokens": 50})
+        mock_propose.return_value = (mock_proposal, "gemini-3.5-flash-lite", {"total_tokens": 50})
         
         mock_created_event = MagicMock()
         mock_created_event.id = "event-id-789"

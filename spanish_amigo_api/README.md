@@ -11,7 +11,7 @@ For complete project architecture and end-to-end setup, see the root [README.md]
 - SQLAlchemy 2.0 typed ORM
 - Alembic schema migrations
 - Neon Serverless PostgreSQL with `pgvector`
-- Google Gemini API (`gemini-3.1-flash-lite` default, `gemini-embedding-2` embeddings)
+- Google Gemini API (`gemini-3.5-flash-lite` default, `gemini-embedding-2` embeddings)
 - LangGraph tutor workflow
 - Firebase Admin Auth for bearer token verification
 - Free Spaced Repetition Scheduler (`py-fsrs` 6.3.2)

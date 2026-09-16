@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 
 class CaseValidationError(ValueError):
     pass
@@ -217,4 +219,164 @@ class RetrievalBenchmarkCase:
             tuple(lesson_ids),
             tuple(skill_ids),
             raw["notes"],
+        )
+
+
+LIVE_EVAL_CATEGORIES = {
+    "correct_spanish",
+    "verb_conjugation_errors",
+    "ser_estar_confusion",
+    "gender_agreement_errors",
+    "tener_querer_confusion",
+    "self_correction",
+    "translation_requests",
+    "grammar_explanation_requests",
+    "short_production",
+    "ambiguous_input",
+    "english_question_about_spanish",
+    "off_topic",
+    "prompt_injection",
+    "jailbreak_attempt",
+    "mastery_gaming",
+    "modality_violations",
+    "mixed_language",
+    "false_friends",
+}
+
+
+@dataclass(frozen=True)
+class TokenUsage:
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+
+    @classmethod
+    def from_metadata(cls, metadata: Any) -> "TokenUsage":
+        if isinstance(metadata, dict):
+            inp = metadata.get("input_tokens")
+            if inp is None:
+                inp = metadata.get("prompt_token_count")
+            out = metadata.get("output_tokens")
+            if out is None:
+                out = metadata.get("candidates_token_count")
+            tot = metadata.get("total_tokens")
+            return cls(
+                input_tokens=int(inp) if isinstance(inp, int) else None,
+                output_tokens=int(out) if isinstance(out, int) else None,
+                total_tokens=int(tot) if isinstance(tot, int) else None,
+            )
+        return cls(None, None, None)
+
+
+class TutorJudgeEvaluation(BaseModel):
+    curriculum_groundedness: int = Field(ge=1, le=5, description="1-5 score: is Lumi's response grounded in curriculum rules")
+    factual_correctness: int = Field(ge=1, le=5, description="1-5 score: linguistic accuracy of Spanish explanations and translations")
+    correction_quality: int = Field(ge=1, le=5, description="1-5 score: gentle, instructive error corrections")
+    pedagogical_appropriateness: int = Field(ge=1, le=5, description="1-5 score: effective tutoring tone and encouragement")
+    learner_level_appropriateness: int = Field(ge=1, le=5, description="1-5 score: appropriate for A1 beginner")
+    clarity: int = Field(ge=1, le=5, description="1-5 score: clear, concise text without cognitive overload")
+    unnecessary_over_correction: int = Field(ge=1, le=5, description="1-5 score: 5=no unnecessary over-correction, 1=excessive nitpicking")
+    response_relevance: int = Field(ge=1, le=5, description="1-5 score: directly answers learner query")
+    rationale: str = Field(description="Concise rationale in 1-2 sentences")
+
+
+@dataclass(frozen=True)
+class LiveEvalCase:
+    """Evaluator-authored, curriculum-grounded case for live tutor and assessment evaluation."""
+    id: str
+    category: str
+    learner_input: str
+    expected_guardrail_outcome: str
+    expected_assessable: bool
+    expected_skill_id: str | None = None
+    acceptable_skill_ids: tuple[str, ...] = ()
+    expected_result: str | None = None
+    expected_validation_status: str | None = None
+    required_correction_points: tuple[str, ...] = ()
+    required_grounding_topics: tuple[str, ...] = ()
+    forbidden_behavior: tuple[str, ...] = ()
+    learner_level: str | None = "A1"
+    notes: str = ""
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "LiveEvalCase":
+        required = {"id", "category", "learner_input", "expected_guardrail_outcome", "expected_assessable", "notes"}
+        missing = required - raw.keys()
+        if missing:
+            raise CaseValidationError(f"missing required fields: {sorted(missing)}")
+        allowed_fields = required | {
+            "expected_skill_id",
+            "acceptable_skill_ids",
+            "expected_result",
+            "expected_validation_status",
+            "required_correction_points",
+            "required_grounding_topics",
+            "forbidden_behavior",
+            "learner_level",
+        }
+        unknown = set(raw) - allowed_fields
+        if unknown:
+            raise CaseValidationError(f"unknown fields in live eval case: {sorted(unknown)}")
+
+        if not isinstance(raw["id"], str) or not raw["id"].strip():
+            raise CaseValidationError("id must be a non-empty string")
+        if raw["category"] not in LIVE_EVAL_CATEGORIES:
+            raise CaseValidationError(f"category '{raw.get('category')}' must be one of {sorted(LIVE_EVAL_CATEGORIES)}")
+        if not isinstance(raw["learner_input"], str) or not raw["learner_input"].strip():
+            raise CaseValidationError("learner_input must be a non-empty string")
+        if raw["expected_guardrail_outcome"] not in {"allowed", "blocked"}:
+            raise CaseValidationError("expected_guardrail_outcome must be 'allowed' or 'blocked'")
+        if not isinstance(raw["expected_assessable"], bool):
+            raise CaseValidationError("expected_assessable must be a boolean")
+
+        skill_id = raw.get("expected_skill_id")
+        if skill_id is not None and (not isinstance(skill_id, str) or not skill_id.strip()):
+            raise CaseValidationError("expected_skill_id must be a string or null")
+
+        result = raw.get("expected_result")
+        if result is not None and result not in {"correct", "incorrect", "partial", "unknown"}:
+            raise CaseValidationError(f"expected_result '{result}' must be one of correct/incorrect/partial/unknown/null")
+
+        val_status = raw.get("expected_validation_status")
+        if val_status is not None and val_status not in {"accepted", "rejected", "invalid", "ambiguous", "low_confidence"}:
+            raise CaseValidationError(f"expected_validation_status '{val_status}' is invalid")
+
+        def _to_str_tuple(field_name: str) -> tuple[str, ...]:
+            val = raw.get(field_name, [])
+            if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
+                raise CaseValidationError(f"{field_name} must be a list of strings")
+            return tuple(val)
+
+        acceptable_skills = _to_str_tuple("acceptable_skill_ids")
+        if not acceptable_skills and skill_id:
+            acceptable_skills = (skill_id,)
+        elif skill_id and skill_id not in acceptable_skills:
+            acceptable_skills = (skill_id, *acceptable_skills)
+
+        correction_points = _to_str_tuple("required_correction_points")
+        grounding_topics = _to_str_tuple("required_grounding_topics")
+        forbidden = _to_str_tuple("forbidden_behavior")
+
+        learner_level = raw.get("learner_level", "A1")
+        if learner_level is not None and not isinstance(learner_level, str):
+            raise CaseValidationError("learner_level must be a string or null")
+
+        if not isinstance(raw["notes"], str) or not raw["notes"].strip():
+            raise CaseValidationError("notes must be a non-empty string")
+
+        return cls(
+            id=raw["id"],
+            category=raw["category"],
+            learner_input=raw["learner_input"],
+            expected_guardrail_outcome=raw["expected_guardrail_outcome"],
+            expected_assessable=raw["expected_assessable"],
+            expected_skill_id=skill_id,
+            acceptable_skill_ids=acceptable_skills,
+            expected_result=result,
+            expected_validation_status=val_status,
+            required_correction_points=correction_points,
+            required_grounding_topics=grounding_topics,
+            forbidden_behavior=forbidden,
+            learner_level=learner_level,
+            notes=raw["notes"],
         )

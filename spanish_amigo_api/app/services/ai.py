@@ -3,7 +3,7 @@ import logging
 import unicodedata
 import json
 from dataclasses import dataclass
-from typing import Annotated, TypedDict, List, NotRequired, Optional, cast
+from typing import Annotated, Any, TypedDict, List, NotRequired, Optional, cast, Literal, overload
 from pydantic import BaseModel, Field, ValidationError
 
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -108,6 +108,8 @@ class TurnPlan:
     retrieval_decision: str
     tutor_messages: list[BaseMessage]
     assessment_event_id: str | None = None
+    assessment_latency_ms: float | None = None
+    assessment_token_usage: dict[str, Any] | None = None
 
 
 # ============================================================================
@@ -536,7 +538,17 @@ not turn contextual or broad vocabulary domains into atomic mastery claims.
 """.strip()
 
 
-def propose_assessment(learner_turn: str, db: Session) -> tuple[AssessmentProposal, str]:
+@overload
+def propose_assessment(learner_turn: str, db: Session, *, return_metadata: Literal[False] = False) -> tuple[AssessmentProposal, str]: ...
+
+
+@overload
+def propose_assessment(learner_turn: str, db: Session, *, return_metadata: Literal[True]) -> tuple[AssessmentProposal, str, dict[str, Any] | None]: ...
+
+
+def propose_assessment(
+    learner_turn: str, db: Session, *, return_metadata: bool = False
+) -> tuple[AssessmentProposal, str] | tuple[AssessmentProposal, str, dict[str, Any] | None]:
     """Obtain an untrusted structured proposal using the configured Gemini model."""
     model_name = model_manager.get_active_model_name(db)
     taxonomy = [
@@ -548,6 +560,22 @@ def propose_assessment(learner_turn: str, db: Session) -> tuple[AssessmentPropos
         }
         for skill in SKILLS
     ]
+    if return_metadata:
+        structured = get_model(model_name).with_structured_output(AssessmentProposal, include_raw=True)
+        response = structured.invoke([
+            SystemMessage(content=_ASSESSMENT_SYSTEM_PROMPT),
+            HumanMessage(content=json.dumps({
+                "taxonomy": taxonomy,
+                "learner_turn_data": learner_turn,
+                "required_assessment_version": ASSESSMENT_VERSION,
+            }, ensure_ascii=False)),
+        ])
+        raw = response.get("raw") if isinstance(response, dict) else None
+        parsed = response.get("parsed") if isinstance(response, dict) else None
+        metadata = getattr(raw, "usage_metadata", None) if raw else None
+        proposal = parsed if isinstance(parsed, AssessmentProposal) else AssessmentProposal.model_validate(parsed)
+        return proposal, model_name, cast(Optional[dict[str, Any]], metadata)
+
     structured = get_model(model_name).with_structured_output(AssessmentProposal)
     response = structured.invoke([
         SystemMessage(content=_ASSESSMENT_SYSTEM_PROMPT),
@@ -565,7 +593,7 @@ def _message_texts(messages: list[BaseMessage]) -> list[str]:
     return [extract_text_content(message.content) for message in messages]
 
 
-def plan_turn(state: TutorState, db: Session) -> TurnPlan:
+def plan_turn(state: TutorState, db: Session, *, persist_assessment: bool = True) -> TurnPlan:
     """One authoritative pre-generation planner used by sync and streaming delivery."""
     guardrail = guardrails_node(state)
     learner_turn = extract_text_content(state["messages"][-1].content)
@@ -586,13 +614,17 @@ def plan_turn(state: TutorState, db: Session) -> TurnPlan:
     validation: EvidenceValidation | None = None
     assessment_model: str | None = None
     event_id: str | None = None
+    assessment_latency: float | None = None
+    assessment_meta: dict[str, Any] | None = None
     event_key = source_turn_key(state.get("session_id"), _message_texts(state["messages"]))
 
     if adaptive_enabled and gate.assessable:
-        existing_event = db.scalar(select(AssessmentEvent).where(
-            AssessmentEvent.user_id == state["user_id"],
-            AssessmentEvent.source_event_key == event_key,
-        ))
+        existing_event = None
+        if persist_assessment:
+            existing_event = db.scalar(select(AssessmentEvent).where(
+                AssessmentEvent.user_id == state["user_id"],
+                AssessmentEvent.source_event_key == event_key,
+            ))
         if existing_event is not None:
             persisted_skill = None
             if existing_event.skill_id:
@@ -612,68 +644,86 @@ def plan_turn(state: TutorState, db: Session) -> TurnPlan:
             event_id = existing_event.id
         else:
             try:
-                proposal, assessment_model = propose_assessment(learner_turn, db)
+                t0_prop = time.perf_counter()
+                prop_res = propose_assessment(
+                    learner_turn, db, return_metadata=True
+                )
+                if len(prop_res) == 3:
+                    proposal, assessment_model, assessment_meta = prop_res
+                else:
+                    proposal, assessment_model = prop_res[0], prop_res[1]
+                    assessment_meta = None
+                assessment_latency = round((time.perf_counter() - t0_prop) * 1000.0, 3)
                 proposal_result = proposal.result
                 validation = validate_assessment_proposal(
                     proposal, learner_turn=learner_turn, gate=gate, evidence_modality="text"
                 )
-                event = create_assessment_event(
-                    db,
-                    verified_uid=state["user_id"],
-                    skill_id=validation.skill.skill_id if validation.skill else None,
-                    source_type="chat_message",
-                    evidence_snapshot=proposal.evidence,
-                    normalized_evidence=validation.normalized_evidence,
-                    evidence_span_start=validation.span_start,
-                    evidence_span_end=validation.span_end,
-                    evidence_modality="text",
-                    proposed_result=proposal.result,
-                    validation_status=validation.status,
-                    proposal_confidence=proposal.confidence,
-                    error_type=proposal.error_type,
-                    severity=proposal.severity,
-                    correction=proposal.correction,
-                    misconception_id=proposal.misconception_id,
-                    rejection_reason=validation.reason,
-                    validator_version=ASSESSMENT_AUDIT_VERSION,
-                    assessment_model_version=assessment_model,
-                    source_event_key=event_key,
-                    chat_session_id=state.get("session_id"),
-                )
-                db.commit()
-                event_id = event.id
+                if persist_assessment:
+                    event = create_assessment_event(
+                        db,
+                        verified_uid=state["user_id"],
+                        skill_id=validation.skill.skill_id if validation.skill else None,
+                        source_type="chat_message",
+                        evidence_snapshot=proposal.evidence,
+                        normalized_evidence=validation.normalized_evidence,
+                        evidence_span_start=validation.span_start,
+                        evidence_span_end=validation.span_end,
+                        evidence_modality="text",
+                        proposed_result=proposal.result,
+                        validation_status=validation.status,
+                        proposal_confidence=proposal.confidence,
+                        error_type=proposal.error_type,
+                        severity=proposal.severity,
+                        correction=proposal.correction,
+                        misconception_id=proposal.misconception_id,
+                        rejection_reason=validation.reason,
+                        validator_version=ASSESSMENT_AUDIT_VERSION,
+                        assessment_model_version=assessment_model,
+                        source_event_key=event_key,
+                        chat_session_id=state.get("session_id"),
+                    )
+                    db.commit()
+                    event_id = event.id
+                else:
+                    event_id = None
             except (ValidationError, ValueError, TypeError, KeyError) as error:
                 logger.warning("[Assessment] Invalid structured proposal: %s", error)
-                event = create_assessment_event(
-                    db, verified_uid=state["user_id"], skill_id=None,
-                    source_type="chat_message", evidence_snapshot=None,
-                    evidence_modality="text", proposed_result="unknown",
-                    validation_status="invalid", rejection_reason="malformed_proposal",
-                    validator_version=ASSESSMENT_AUDIT_VERSION, assessment_model_version=assessment_model,
-                    source_event_key=event_key, chat_session_id=state.get("session_id"),
-                )
-                db.commit()
-                event_id = event.id
+                if persist_assessment:
+                    event = create_assessment_event(
+                        db, verified_uid=state["user_id"], skill_id=None,
+                        source_type="chat_message", evidence_snapshot=None,
+                        evidence_modality="text", proposed_result="unknown",
+                        validation_status="invalid", rejection_reason="malformed_proposal",
+                        validator_version=ASSESSMENT_AUDIT_VERSION, assessment_model_version=assessment_model,
+                        source_event_key=event_key, chat_session_id=state.get("session_id"),
+                    )
+                    db.commit()
+                    event_id = event.id
+                else:
+                    event_id = None
                 validation = EvidenceValidation("invalid", "malformed_proposal", None, None)
             except Exception as error:
                 # Provider failure cannot accept evidence and must not make normal chat unusable.
                 logger.warning("[Assessment] Provider failure; continuing without assessment: %s", error)
-                event = create_assessment_event(
-                    db, verified_uid=state["user_id"], skill_id=None,
-                    source_type="chat_message", evidence_snapshot=None,
-                    evidence_modality="text", proposed_result="unknown",
-                    validation_status="invalid", rejection_reason="assessment_provider_failure",
-                    validator_version=ASSESSMENT_AUDIT_VERSION, assessment_model_version=assessment_model,
-                    source_event_key=event_key, chat_session_id=state.get("session_id"),
-                )
-                db.commit()
-                event_id = event.id
+                if persist_assessment:
+                    event = create_assessment_event(
+                        db, verified_uid=state["user_id"], skill_id=None,
+                        source_type="chat_message", evidence_snapshot=None,
+                        evidence_modality="text", proposed_result="unknown",
+                        validation_status="invalid", rejection_reason="assessment_provider_failure",
+                        validator_version=ASSESSMENT_AUDIT_VERSION, assessment_model_version=assessment_model,
+                        source_event_key=event_key, chat_session_id=state.get("session_id"),
+                    )
+                    db.commit()
+                    event_id = event.id
+                else:
+                    event_id = None
                 validation = EvidenceValidation("invalid", "assessment_provider_failure", None, None)
 
     relevant_skill_id = validation.skill.skill_id if validation and validation.skill else None
-    learner_state = get_state_for_user(db, state["user_id"], relevant_skill_id) if relevant_skill_id else None
+    learner_state = get_state_for_user(db, state["user_id"], relevant_skill_id) if (relevant_skill_id and persist_assessment) else None
     accepted_count = 0
-    if relevant_skill_id:
+    if relevant_skill_id and persist_assessment:
         accepted_count = int(db.scalar(select(func.count()).select_from(AssessmentEvent).where(
             AssessmentEvent.user_id == state["user_id"],
             AssessmentEvent.skill_id == relevant_skill_id,
@@ -698,7 +748,8 @@ def plan_turn(state: TutorState, db: Session) -> TurnPlan:
         state, db, targeted_skill_id=targeted, pedagogical_action=action
     )
     return TurnPlan(False, guardrail.get("guardrail_reason"), gate, proposal, validation,
-        action, relevant_skill_id, retrieval_decision, tutor_messages, event_id)
+        action, relevant_skill_id, retrieval_decision, tutor_messages, event_id,
+        assessment_latency, assessment_meta)
 
 
 def tutor_node(state: TutorState) -> dict:

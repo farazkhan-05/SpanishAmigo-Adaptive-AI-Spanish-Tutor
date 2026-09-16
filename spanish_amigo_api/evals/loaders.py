@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from .schemas import CaseValidationError, GoldenCase, Phase5Case, Phase7Case, RetrievalBenchmarkCase
+from .schemas import CaseValidationError, GoldenCase, LiveEvalCase, Phase5Case, Phase7Case, RetrievalBenchmarkCase
 
 
 EVALS_DIR = Path(__file__).resolve().parent
@@ -12,6 +12,7 @@ DEFAULT_CASES_PATH = EVALS_DIR / "golden_cases.jsonl"
 PHASE5_CASES_PATH = EVALS_DIR / "phase5_cases.jsonl"
 PHASE7_CASES_PATH = EVALS_DIR / "phase7_cases.jsonl"
 RETRIEVAL_BENCHMARK_PATH = EVALS_DIR / "retrieval_benchmark.jsonl"
+LIVE_EVAL_CASES_PATH = EVALS_DIR / "live_eval_cases.jsonl"
 
 
 def load_cases(path: Path = DEFAULT_CASES_PATH) -> list[GoldenCase]:
@@ -181,3 +182,47 @@ def get_authoritative_lesson_titles() -> dict[int, str]:
         4: "Where is it? (The GPS Module)",
         5: "The Ultimate Café Simulation (RPG Mode)",
     }
+
+
+def load_live_eval_cases(path: Path = LIVE_EVAL_CASES_PATH) -> list[LiveEvalCase]:
+    cases: list[LiveEvalCase] = []
+    seen: set[str] = set()
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            raw = json.loads(line)
+            if not isinstance(raw, dict):
+                raise CaseValidationError("case must be a JSON object")
+            case = LiveEvalCase.from_dict(raw)
+        except (json.JSONDecodeError, CaseValidationError) as error:
+            raise CaseValidationError(f"{path}:{line_number}: {error}") from error
+        if case.id in seen:
+            raise CaseValidationError(f"{path}:{line_number}: duplicate case id '{case.id}'")
+        seen.add(case.id)
+        cases.append(case)
+    if not cases:
+        raise CaseValidationError(f"{path}: no cases found")
+    return cases
+
+
+def validate_live_eval_cases_against_curriculum(
+    cases: list[LiveEvalCase],
+    valid_skill_ids: set[str] | None = None,
+) -> None:
+    """Ensure every referenced skill ID in live eval cases exists in authoritative curriculum metadata."""
+    if valid_skill_ids is None:
+        from app.curriculum_metadata import SKILLS
+        valid_skill_ids = {s.skill_id for s in SKILLS}
+
+    for case in cases:
+        if case.expected_skill_id is not None:
+            if case.expected_skill_id not in valid_skill_ids:
+                raise CaseValidationError(
+                    f"case '{case.id}': expected_skill_id '{case.expected_skill_id}' does not exist in curriculum taxonomy"
+                )
+        for skid in case.acceptable_skill_ids:
+            if skid not in valid_skill_ids:
+                raise CaseValidationError(
+                    f"case '{case.id}': acceptable_skill_id '{skid}' does not exist in curriculum taxonomy"
+                )

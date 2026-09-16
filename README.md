@@ -338,7 +338,7 @@ ALLOWED_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 AUTH_ALLOW_INSECURE_DEV_TOKENS=false
 LOG_LEVEL=INFO
 GEMINI_PRIMARY_MODEL=gemini-3.1-flash-lite
-GEMINI_BACKUP_MODEL=gemma-4-31b
+GEMINI_BACKUP_MODEL=gemma-4-31b-it
 GEMINI_EMBEDDING_MODEL=gemini-embedding-2
 ADAPTIVE_V2_PLANNER_ENABLED=false
 ```
@@ -398,7 +398,7 @@ curl http://127.0.0.1:8000/health
 | `AUTH_ALLOW_INSECURE_DEV_TOKENS` | Permits mock authentication tokens for test suites. | `false` |
 | `LOG_LEVEL` | Application logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). | `INFO` |
 | `GEMINI_PRIMARY_MODEL` | Primary model for conversational tutoring and assessment. | `gemini-3.1-flash-lite` |
-| `GEMINI_BACKUP_MODEL` | Fallback model used upon primary quota exhaustion. | `gemma-4-31b` |
+| `GEMINI_BACKUP_MODEL` | Fallback model used upon primary quota exhaustion. | `gemma-4-31b-it` |
 | `GEMINI_EMBEDDING_MODEL` | Embedding model for semantic slide retrieval. | `gemini-embedding-2` |
 | `ADAPTIVE_V2_PLANNER_ENABLED` | Feature flag activating the Adaptive V2 assessment engine. | `false` |
 

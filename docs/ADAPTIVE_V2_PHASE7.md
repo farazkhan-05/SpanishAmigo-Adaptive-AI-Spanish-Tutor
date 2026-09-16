@@ -6,6 +6,6 @@ Phase 7 adds a 150-case human-authored evaluation corpus and deterministic C bac
 
 A is prompt-only; B remains the frozen Phase-2 `B_legacy` RAG product baseline; C is the Phase-5/6 backend state loop and excludes the later Phase-8 frontend. A/B adaptive state metrics are not applicable, not zero. `B_metadata` and `B_hybrid` remain retrieval experiments; production has not been changed from `B_legacy`.
 
-The deterministic measured report is `spanish_amigo_api/evals/reports/phase7-offline.json`. Real PostgreSQL retrieval and migration validation, live assessment smoke testing, and model-judged tutor quality are not run. PostgreSQL migrations are therefore **NOT VERIFIED**.
+The deterministic measured report is `spanish_amigo_api/evals/reports/phase7-offline.json`. Within this offline evaluation suite, real PostgreSQL retrieval, migration execution, live assessment smoke testing, and model-judged tutor quality were deliberately excluded from the test harness. Live PostgreSQL migrations and live Gemini assessments were subsequently verified during production release gates, while real retrieval quality evaluation remains not run.
 
 No production behavior, prompts, thresholds, mastery/confidence constants, FSRS mapping, retrieval default, frontend code, dependencies, or lockfiles changed in this phase.

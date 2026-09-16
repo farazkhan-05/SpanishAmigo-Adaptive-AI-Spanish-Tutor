@@ -25,6 +25,16 @@ Critical zero-violation gates: cross-tenant access, contextual mastery, text-onl
 
 Phase 7 C backend fixture evaluation: assessability accuracy/precision/recall/macro-F1 1.0; accepted-evidence precision 1.0; false accepted evidence 0.0; policy accuracy/macro-F1 1.0; legitimate update success 1.0; false mastery update 0.0; duplicate update 0.0; bounds violations 0; review deterministic correctness/rating mapping 1.0; tenancy unauthorized-access success 0.0; safety invariant violations 0; run failures 0. These measure deterministic backend fixtures, not learner outcomes or free-form tutor quality. A and B adaptive metrics are **NOT APPLICABLE**. Real retrieval Recall@1/3/K and MRR are **NOT RUN** without a safe local corpus/DB. Latency and tokens are **NOT RUN** unless actually observed.
 
+## Release verification status
+
+Subsequent to the 2026-09-15 offline evaluation run, operational release gates were executed and verified against live infrastructure:
+
+- **PostgreSQL and pgvector migrations**: Verified against live PostgreSQL; production Neon database upgraded to migration head `c6d7e8f9a0b1`.
+- **Curriculum seeding and idempotency**: Verified in production; 14 skills, 231 slides, and 382 associations seeded with real `gemini-embedding-2` 768-dimensional vectors. Second execution confirmed idempotency (0 inserts, 0 updates, 245 unchanged, 0 failures).
+- **Live Gemini assessment**: Verified in production using `gemini-3.1-flash-lite`, confirming structured assessment proposal generation, deterministic validation acceptance/rejection, and audit event persistence.
+- **Production deployment**: Verified operational on Vercel for both frontend (`https://spanishamigo.vercel.app`) and FastAPI backend (`https://spanish-amigo-api.vercel.app`), with `ADAPTIVE_V2_PLANNER_ENABLED=true` active in production.
+- **Retrieval status**: Real retrieval quality measurement (Recall@K, MRR) against a representative labeled production-like PostgreSQL corpus remains **NOT RUN**. Production retrieval remains `B_legacy`; `B_metadata` and `B_hybrid` remain evaluation experiments.
+
 ## Explicit opt-in live/integration evaluation
 
 ```powershell
@@ -36,4 +46,4 @@ uv run python -m evals.run_eval db-retrieval --variant B_legacy --report evals/r
 
 Live tutoring quality is optional and must identify provider/model/config and label any judge result **MODEL-JUDGED**. Use the versioned rubric dimensions correctness, curriculum grounding, pedagogical usefulness, level appropriateness, directness, hallucination, and unnecessary adaptation/interruption; prefer blinded pairwise A/B/C comparisons. A judge is supplementary, never the sole signal or CI requirement. The real DB command is read-only and must target only a known safe local database; it is not run automatically.
 
-Known limitations: fixture retrieval is not a pgvector benchmark; no live judge/model call was run; PostgreSQL/pgvector migrations remain **NOT VERIFIED**; the Phase-7 scenario runner complements rather than replaces endpoint integration tests.
+Known limitations: The Phase 7 offline test harness evaluates deterministic backend fixtures and deliberately excludes external networks, live model APIs, and database engines. Fixture retrieval is not a pgvector benchmark, and real retrieval quality metrics (Recall@K, MRR) remain NOT RUN pending a representative labeled PostgreSQL benchmark corpus. Model-judged live tutoring quality was not measured. While PostgreSQL migrations, curriculum seeding, and live Gemini assessment were subsequently verified during production release gates, the offline scenario runner itself complements rather than replaces live integration tests.

@@ -1,4 +1,6 @@
-# SpanishAmigo adaptive-upgrade contract
+# SpanishAmigo adaptive-upgrade contract (historical design contract)
+
+> **Historical design contract**: This document records the architectural constraints and design requirements established prior to Adaptive V2 implementation. The implementation has since been completed and verified in production. For current operational behavior and deployment architecture, consult the root [README.md](../README.md), [EVALUATION.md](../EVALUATION.md), and source code. Statements below that use future tense or describe components as absent reflect the state of the repository at the time this contract was written.
 
 ## 1. Product thesis
 
@@ -19,7 +21,7 @@ The differentiator is evidence-backed long-term personalization, not more autono
 - The existing responsive CourseMap, CourseJourney, CourseSupportPanels, route-aware Layout, compact LessonPlayer, dark mode, and accessibility work are baseline functionality to extend, not rebuild.
 - Schema changes use Alembic; Python dependencies use `uv`/`uv.lock`, frontend dependencies use npm/`package-lock.json`.
 
-Current active backend deployment target: not verified from repository source.
+Baseline note at time of contract: active backend deployment target was not verified from repository source (subsequently established and verified on Vercel).
 
 ## 3. Learner-state semantics
 

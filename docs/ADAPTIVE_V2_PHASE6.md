@@ -28,4 +28,4 @@ Authenticated endpoints are `GET /adaptive/reviews/due`, `GET /adaptive/reviews/
 
 Every lookup is UID-scoped. Rationale uses stored facts only: due, prior independent failure, or need for additional validated evidence.
 
-Migration `c6d7e8f9a0b1` is additive and reversible. PostgreSQL/pgvector execution remains NOT VERIFIED.
+Migration `c6d7e8f9a0b1` is additive and reversible. Live PostgreSQL/pgvector execution was not verified within this implementation phase (subsequently verified during production release gates).

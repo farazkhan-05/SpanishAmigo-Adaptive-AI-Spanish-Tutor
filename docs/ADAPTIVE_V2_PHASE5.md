@@ -62,4 +62,4 @@ Malformed output, missing fields, invalid skills/evidence, low confidence, and p
 
 ## Verification and Phase 6 boundary
 
-The deterministic offline `C_planner` dataset contains 20 cases. The measured run is recorded in `evals/reports/phase5-planner.json`; live Gemini assessment, database retrieval evaluation, and PostgreSQL/pgvector migration execution were not run. Phase 6 still owns mastery mutation, evidence-weighting/versioned mastery logic, state counters/confidence changes, and review scheduling. FSRS is not implemented.
+The deterministic offline `C_planner` dataset contains 20 cases. The measured run is recorded in `evals/reports/phase5-planner.json`; live Gemini assessment, database retrieval evaluation, and PostgreSQL/pgvector migration execution were not run during this phase. At this milestone, Phase 6 remained the owner of mastery mutation, evidence-weighting/versioned mastery logic, state counters/confidence changes, and review scheduling, with FSRS implemented in that subsequent phase.

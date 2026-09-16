@@ -26,6 +26,6 @@ Taxonomy identity is the static stable `skill_id`; events and attempts retain `s
 
 ## Migration and verification boundary
 
-Migration `b4c5d6e7f8a9` is additive, names every new foreign key/constraint/index, bounds numeric values, uses nullable mastery fields, and has a reversible downgrade. It has not been executed against a safe disposable PostgreSQL/pgvector database in this phase; static and SQLite-backed application tests do not verify PostgreSQL DDL, Phase 3 migration behavior, or downgrade/re-upgrade behavior.
+Migration `b4c5d6e7f8a9` is additive, names every new foreign key/constraint/index, bounds numeric values, uses nullable mastery fields, and has a reversible downgrade. It was not executed against a safe disposable PostgreSQL/pgvector database in this phase (subsequently verified during production release gates); static and SQLite-backed application tests do not verify PostgreSQL DDL, Phase 3 migration behavior, or downgrade/re-upgrade behavior.
 
 Deliberately deferred: LLM assessment proposals, final evidence validation, mastery mutation, adaptive policy/LangGraph, FSRS, exercise generation, adaptive UI, hybrid retrieval activation, and a public event/attempt write API.

@@ -10,8 +10,30 @@ from pathlib import Path
 from typing import Any
 
 from .baseline import baseline_configuration, validate_baseline_configuration
-from .loaders import DEFAULT_CASES_PATH, PHASE5_CASES_PATH, PHASE7_CASES_PATH, dataset_sha256, load_cases, load_phase5_cases, load_phase7_cases
-from .metrics import accuracy, binary_macro_f1, macro_f1, mean, precision, recall, recall_at_k, reciprocal_rank
+from .loaders import (
+    DEFAULT_CASES_PATH,
+    PHASE5_CASES_PATH,
+    PHASE7_CASES_PATH,
+    RETRIEVAL_BENCHMARK_PATH,
+    dataset_sha256,
+    load_cases,
+    load_phase5_cases,
+    load_phase7_cases,
+    load_retrieval_cases,
+    validate_retrieval_cases_against_curriculum,
+)
+from .metrics import (
+    accuracy,
+    binary_macro_f1,
+    hit_rate_at_k,
+    macro_f1,
+    mean,
+    paired_bootstrap_ci,
+    precision,
+    recall,
+    recall_at_k,
+    reciprocal_rank,
+)
 from .reporting import write_report
 
 
@@ -44,6 +66,222 @@ def retrieval_report(cases_path: Path, variant: str = "B_legacy") -> dict[str, A
         if not set(observed) & expected:
             failures.append({"case_id": case.id, "expected_behavior": case.expected_behavior, "expected_relevant_slide_ids": sorted(expected), "retrieved_slide_ids": observed, "rank_positions": [], "failure_category": "retrieval_miss"})
     return _runtime_report("LOCAL/INTEGRATION RETRIEVAL EVAL", cases_path, {"variant": variant, "Recall@1": mean(recall_ones), "Recall@3": mean(recalls), "MRR": mean(ranks)}, failures, runtime_configuration())
+
+
+def retrieval_benchmark_report(
+    cases_path: Path = RETRIEVAL_BENCHMARK_PATH,
+    variants: list[str] | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    import time
+    from urllib.parse import urlparse
+    from sqlalchemy import func, select
+
+    from app.config import get_settings
+    from app.database import SessionLocal
+    from app.models import LessonSlide, LessonSlideSkill, Skill
+    from .adapters.current_rag import (
+        embed_query,
+        retrieve_hybrid_variant,
+        retrieve_legacy,
+        retrieve_targeted_oracle_variant,
+        runtime_configuration,
+    )
+
+    if variants is None:
+        variants = ["B_legacy", "B_hybrid"]
+
+    cases = load_retrieval_cases(cases_path)
+    validate_retrieval_cases_against_curriculum(cases)
+    if limit is not None:
+        cases = cases[:limit]
+
+    settings = get_settings()
+    parsed_db = urlparse(settings.DATABASE_URL)
+    db_metadata: dict[str, Any] = {
+        "host": parsed_db.hostname,
+        "database": parsed_db.path.lstrip("/"),
+        "environment": settings.ENV,
+    }
+
+    db = SessionLocal()
+    try:
+        slide_count = db.scalar(select(func.count(LessonSlide.id)))
+        skill_count = db.scalar(select(func.count(Skill.skill_id)))
+        assoc_count = db.scalar(select(func.count(LessonSlideSkill.lesson_slide_id)))
+        embedded_count = db.scalar(select(func.count(LessonSlide.id)).where(LessonSlide.embedding.isnot(None)))
+        db_metadata.update({
+            "slide_count": slide_count,
+            "skill_count": skill_count,
+            "slide_skill_association_count": assoc_count,
+            "embedded_slide_count": embedded_count,
+        })
+
+        per_case_embeddings: dict[str, list[float]] = {}
+        embedding_times: list[float] = []
+
+        # 1. Generate one embedding per query
+        for case in cases:
+            t0 = time.perf_counter()
+            vec = embed_query(case.query)
+            embedding_times.append((time.perf_counter() - t0) * 1000.0)
+            per_case_embeddings[case.id] = vec
+
+        # 2. Evaluate variants
+        variant_results: dict[str, Any] = {}
+        variant_failures: dict[str, list[dict[str, Any]]] = {}
+        per_variant_scores: dict[str, dict[str, list[float]]] = {}
+
+        for variant in variants:
+            is_oracle = (variant == "targeted_oracle")
+            h1_list: list[float] = []
+            h3_list: list[float] = []
+            r1_list: list[float] = []
+            r3_list: list[float] = []
+            mrr_list: list[float] = []
+            retrieval_times: list[float] = []
+            failures: list[dict[str, Any]] = []
+
+            by_lesson: dict[int, dict[str, list[float]]] = {}
+            by_category: dict[str, dict[str, list[float]]] = {}
+
+            for case in cases:
+                query_vec = per_case_embeddings[case.id]
+                expected = set(case.expected_relevant_slide_ids)
+
+                t0 = time.perf_counter()
+                if variant == "B_legacy":
+                    observed = retrieve_legacy(db, query_vec)
+                elif variant == "B_hybrid":
+                    observed = retrieve_hybrid_variant(db, case.query, query_vec)
+                elif variant == "targeted_oracle":
+                    skill_id = case.expected_relevant_skill_ids[0] if case.expected_relevant_skill_ids else ""
+                    observed = retrieve_targeted_oracle_variant(db, query_vec, skill_id)
+                else:
+                    raise ValueError(f"unknown variant: {variant}")
+                retrieval_times.append((time.perf_counter() - t0) * 1000.0)
+
+                h1 = hit_rate_at_k(observed, expected, 1)
+                h3 = hit_rate_at_k(observed, expected, 3)
+                r1 = recall_at_k(observed, expected, 1)
+                r3 = recall_at_k(observed, expected, 3)
+                rr = reciprocal_rank(observed, expected)
+
+                h1_list.append(h1)
+                h3_list.append(h3)
+                r1_list.append(r1)
+                r3_list.append(r3)
+                mrr_list.append(rr)
+
+                lid = case.primary_lesson_id
+                ls = by_lesson.setdefault(lid, {"h1": [], "h3": [], "r1": [], "r3": [], "mrr": []})
+                ls["h1"].append(h1); ls["h3"].append(h3); ls["r1"].append(r1); ls["r3"].append(r3); ls["mrr"].append(rr)
+
+                cat = case.category
+                cs = by_category.setdefault(cat, {"h1": [], "h3": [], "r1": [], "r3": [], "mrr": []})
+                cs["h1"].append(h1); cs["h3"].append(h3); cs["r1"].append(r1); cs["r3"].append(r3); cs["mrr"].append(rr)
+
+                if not (set(observed) & expected):
+                    failures.append({
+                        "case_id": case.id,
+                        "query": case.query,
+                        "category": case.category,
+                        "lesson_id": case.primary_lesson_id,
+                        "expected_relevant_slide_ids": sorted(expected),
+                        "retrieved_slide_ids": observed,
+                        "failure_category": "retrieval_miss",
+                    })
+
+            per_variant_scores[variant] = {
+                "h1": h1_list, "h3": h3_list, "r1": r1_list, "r3": r3_list, "mrr": mrr_list
+            }
+            variant_failures[variant] = failures
+
+            lesson_summary = {
+                str(lid): {
+                    "case_count": len(metrics["h3"]),
+                    "Hit Rate@1": mean(metrics["h1"]),
+                    "Hit Rate@3": mean(metrics["h3"]),
+                    "Recall@1": mean(metrics["r1"]),
+                    "Recall@3": mean(metrics["r3"]),
+                    "MRR": mean(metrics["mrr"]),
+                }
+                for lid, metrics in sorted(by_lesson.items())
+            }
+
+            category_summary = {
+                cat: {
+                    "case_count": len(metrics["h3"]),
+                    "Hit Rate@1": mean(metrics["h1"]),
+                    "Hit Rate@3": mean(metrics["h3"]),
+                    "Recall@1": mean(metrics["r1"]),
+                    "Recall@3": mean(metrics["r3"]),
+                    "MRR": mean(metrics["mrr"]),
+                }
+                for cat, metrics in sorted(by_category.items())
+            }
+
+            comparison_label = (
+                "upper-bound experiment (requires oracle skill tag from benchmark annotation)"
+                if is_oracle
+                else "fair general retrieval competitor"
+                if variant == "B_hybrid"
+                else "fair general retrieval baseline"
+            )
+
+            variant_results[variant] = {
+                "variant": variant,
+                "oracle_conditioned": is_oracle,
+                "comparison_type": comparison_label,
+                "overall_metrics": {
+                    "Hit Rate@1": mean(h1_list),
+                    "Hit Rate@3": mean(h3_list),
+                    "Recall@1": mean(r1_list),
+                    "Recall@3": mean(r3_list),
+                    "MRR": mean(mrr_list),
+                },
+                "lesson_breakdown": lesson_summary,
+                "category_breakdown": category_summary,
+                "failure_count": len(failures),
+                "timing": {
+                    "mean_retrieval_ms": mean(retrieval_times),
+                    "sample_count": len(retrieval_times),
+                },
+            }
+
+        paired_comparisons = {}
+        if "B_legacy" in per_variant_scores and "B_hybrid" in per_variant_scores:
+            legacy_scores = per_variant_scores["B_legacy"]
+            hybrid_scores = per_variant_scores["B_hybrid"]
+            paired_comparisons["B_hybrid_vs_B_legacy"] = {
+                "fair_comparison": True,
+                "notes": "Same query set, same embeddings, same relevance labels, same top-K, same DB state.",
+                "Hit_Rate_at_3_delta": paired_bootstrap_ci(legacy_scores["h3"], hybrid_scores["h3"]),
+                "Recall_at_3_delta": paired_bootstrap_ci(legacy_scores["r3"], hybrid_scores["r3"]),
+                "MRR_delta": paired_bootstrap_ci(legacy_scores["mrr"], hybrid_scores["mrr"]),
+            }
+
+        return {
+            "mode": "DEFENSIBLE CURRICULUM RETRIEVAL BENCHMARK",
+            "status": "MEASURED",
+            "timestamp_utc": datetime.now(UTC).isoformat(),
+            "git_sha": git_sha(),
+            "dataset_path": str(cases_path),
+            "dataset_sha256": dataset_sha256(cases_path),
+            "case_count": len(cases),
+            "database_metadata": db_metadata,
+            "runtime_configuration": runtime_configuration(),
+            "variants_evaluated": variants,
+            "metrics_by_variant": variant_results,
+            "paired_comparisons": paired_comparisons,
+            "failures_by_variant": variant_failures,
+            "timing": {
+                "mean_embedding_generation_ms": mean(embedding_times),
+                "total_cases_timed": len(cases),
+            },
+        }
+    finally:
+        db.close()
 
 
 def planner_offline_report(cases_path: Path = PHASE5_CASES_PATH) -> dict[str, Any]:
@@ -238,11 +476,12 @@ def _runtime_report(mode: str, cases_path: Path, metrics: dict[str, Any], failur
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="SpanishAmigo pre-adaptive baseline evaluator")
-    parser.add_argument("mode", choices=("offline", "planner-offline", "phase7-offline", "db-retrieval", "live-model", "live-assessment-smoke"))
+    parser.add_argument("mode", choices=("offline", "planner-offline", "phase7-offline", "db-retrieval", "live-model", "live-assessment-smoke", "retrieval-benchmark"))
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES_PATH)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--baseline", choices=("A", "B"), default="B")
     parser.add_argument("--variant", choices=("B_legacy", "B_metadata", "B_hybrid"), default="B_legacy")
+    parser.add_argument("--variants", nargs="+", choices=("B_legacy", "B_hybrid", "targeted_oracle"), default=["B_legacy", "B_hybrid"])
     parser.add_argument("--limit", type=int)
     parser.add_argument("--confirm-live", action="store_true", help="Required because this command invokes Gemini and may consume quota.")
     args = parser.parse_args()
@@ -259,7 +498,14 @@ def main() -> None:
             raise SystemExit("LIVE C ASSESSMENT SMOKE requires --confirm-live; no model quota was consumed.")
         assessment_cases = args.cases if args.cases != DEFAULT_CASES_PATH else PHASE5_CASES_PATH
         report = live_assessment_smoke(assessment_cases, args.limit)
+    elif args.mode == "retrieval-benchmark":
+        if not args.confirm_live:
+            raise SystemExit("RETRIEVAL BENCHMARK requires --confirm-live because it invokes Gemini embeddings and queries PostgreSQL; no model quota was consumed.")
+        cases_path = args.cases if args.cases != DEFAULT_CASES_PATH else RETRIEVAL_BENCHMARK_PATH
+        report = retrieval_benchmark_report(cases_path, variants=args.variants, limit=args.limit)
     elif args.mode == "db-retrieval":
+        if not args.confirm_live:
+            raise SystemExit("DB-RETRIEVAL requires --confirm-live because it invokes Gemini embeddings and queries PostgreSQL; no model quota was consumed.")
         report = retrieval_report(args.cases, args.variant)
     else:
         if not args.confirm_live:

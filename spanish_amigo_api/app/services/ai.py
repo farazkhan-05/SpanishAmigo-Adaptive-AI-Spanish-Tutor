@@ -110,6 +110,8 @@ class TurnPlan:
     assessment_event_id: str | None = None
     assessment_latency_ms: float | None = None
     assessment_token_usage: dict[str, Any] | None = None
+    retrieval_latency_ms: float | None = None
+    embedding_latency_ms: float | None = None
 
 
 # ============================================================================
@@ -185,16 +187,23 @@ def get_model(model_name: str, bind_toggle_theme: bool = False) -> ChatGoogleGen
     return model
 
 
-def invoke_with_fallback(messages: list, db: Optional[Session] = None, bind_toggle_theme: bool = False) -> AIMessage:
+def invoke_with_fallback(messages: list, db: Optional[Session] = None, bind_toggle_theme: bool = False, metadata: dict[str, Any] | None = None) -> AIMessage:
     """Invoke the active model. Switch to backup model on 429 quota exhaustion."""
     active = model_manager.get_active_model_name(db)
+    if metadata is not None:
+        metadata.update({"model_name": active, "fallback_used": active == model_manager.backup_model, "retry_count": 0})
     try:
-        return get_model(active, bind_toggle_theme=bind_toggle_theme).invoke(messages)
+        response = get_model(active, bind_toggle_theme=bind_toggle_theme).invoke(messages)
+        if metadata is not None: metadata["usage_metadata"] = getattr(response, "usage_metadata", None)
+        return response
     except Exception as e:
         if model_manager.is_quota_error(e) and active == model_manager.primary_model:
             model_manager.trigger_fallback(db)
+            if metadata is not None: metadata.update({"model_name": model_manager.backup_model, "fallback_used": True, "retry_count": 1})
             try:
-                return get_model(model_manager.backup_model, bind_toggle_theme=bind_toggle_theme).invoke(messages)
+                response = get_model(model_manager.backup_model, bind_toggle_theme=bind_toggle_theme).invoke(messages)
+                if metadata is not None: metadata["usage_metadata"] = getattr(response, "usage_metadata", None)
+                return response
             except Exception as backup_err:
                 logger.error(f"Backup model '{model_manager.backup_model}' also failed: {backup_err}")
                 raise backup_err
@@ -444,6 +453,7 @@ def prepare_tutor_messages(
     *,
     targeted_skill_id: str | None = None,
     pedagogical_action: PedagogicalAction | None = None,
+    timing: dict[str, float] | None = None,
 ) -> List[BaseMessage]:
     """Prepares and structures the complete message context for the AI Tutor node, running semantic RAG slides lookup."""
     user_log = f"[User: {state.get('user_id', 'Unknown')}]"
@@ -462,12 +472,14 @@ def prepare_tutor_messages(
             
             query_text = f"task: search result | query: {last_user_msg}"
             
+            embedding_started = time.perf_counter()
             emb_res = client.models.embed_content(
                 model=settings.GEMINI_EMBEDDING_MODEL,
                 contents=query_text,
                 config=types.EmbedContentConfig(output_dimensionality=768)
             )
             query_vector = emb_res.embeddings[0].values
+            if timing is not None: timing["embedding_latency_ms"] = (time.perf_counter() - embedding_started) * 1000
             
             relevant_chunks = []
             # Normal production remains frozen B_legacy. A validated targeted action
@@ -478,11 +490,14 @@ def prepare_tutor_messages(
                 PedagogicalAction.TARGETED_PRACTICE_WITH_HINT,
                 PedagogicalAction.CONTEXTUAL_TRANSFER,
             }:
+                retrieval_started = time.perf_counter()
                 retrieval_results = semantic_metadata(
                     db, query_vector, RetrievalFilters(skill_ids=(targeted_skill_id,))
                 )[:3]
             else:
+                retrieval_started = time.perf_counter()
                 retrieval_results = legacy_semantic(db, query_vector)
+            if timing is not None: timing["retrieval_latency_ms"] = (time.perf_counter() - retrieval_started) * 1000
             for result in retrieval_results:
                 chunk = f"[Lesson {result.lesson_id} Slide {result.slide_index}] {result.content_text}"
                 if result.explanation:
@@ -744,12 +759,14 @@ def plan_turn(state: TutorState, db: Session, *, persist_assessment: bool = True
         PedagogicalAction.CONTEXTUAL_TRANSFER,
     } else None
     retrieval_decision = "targeted_skill" if targeted else "B_legacy"
+    timing: dict[str, float] = {}
     tutor_messages = prepare_tutor_messages(
         state, db, targeted_skill_id=targeted, pedagogical_action=action
+        , timing=timing
     )
     return TurnPlan(False, guardrail.get("guardrail_reason"), gate, proposal, validation,
         action, relevant_skill_id, retrieval_decision, tutor_messages, event_id,
-        assessment_latency, assessment_meta)
+        assessment_latency, assessment_meta, timing.get("retrieval_latency_ms"), timing.get("embedding_latency_ms"))
 
 
 def tutor_node(state: TutorState) -> dict:
@@ -758,8 +775,9 @@ def tutor_node(state: TutorState) -> dict:
     try:
         plan = state.get("turn_plan") or plan_turn(state, db)
         messages = plan.tutor_messages
-        response = invoke_with_fallback(messages, db, bind_toggle_theme=True)
-        return {"messages": [response]}
+        execution_metadata: dict[str, Any] = {}
+        response = invoke_with_fallback(messages, db, bind_toggle_theme=True, metadata=execution_metadata)
+        return {"messages": [response], "execution_metadata": execution_metadata}
     finally:
         if own_db:
             db.close()
@@ -785,7 +803,7 @@ def stream_with_fallback(messages: list, bind_toggle_theme: bool = False):
         raise e
 
 
-async def astream_with_fallback(messages: list, db: Session, bind_toggle_theme: bool = False):
+async def astream_with_fallback(messages: list, db: Session, bind_toggle_theme: bool = False, metadata: dict[str, Any] | None = None):
     """
     Native async generator that streams token chunks without blocking the ASGI event loop.
     Uses LangChain's astream() for true non-blocking I/O. Falls back to backup model on quota errors.
@@ -794,6 +812,7 @@ async def astream_with_fallback(messages: list, db: Session, bind_toggle_theme: 
     yields, so Time-To-First-Token drops to <200ms regardless of DB/RAG overhead.
     """
     active = model_manager.get_active_model_name(db)
+    if metadata is not None: metadata.update({"model_name": active, "fallback_used": active == model_manager.backup_model, "retry_count": 0})
     try:
         model = get_model(active, bind_toggle_theme=bind_toggle_theme)
         async for chunk in model.astream(messages):
@@ -801,6 +820,7 @@ async def astream_with_fallback(messages: list, db: Session, bind_toggle_theme: 
     except Exception as e:
         if model_manager.is_quota_error(e) and active == model_manager.primary_model:
             model_manager.trigger_fallback(db)
+            if metadata is not None: metadata.update({"model_name": model_manager.backup_model, "fallback_used": True, "retry_count": 1})
             try:
                 model = get_model(model_manager.backup_model, bind_toggle_theme=bind_toggle_theme)
                 async for chunk in model.astream(messages):

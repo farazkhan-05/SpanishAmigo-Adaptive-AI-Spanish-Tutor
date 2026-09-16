@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import List, cast
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +29,9 @@ class Settings(BaseSettings):
     # Phase 5 observes and plans but never mutates mastery. Conservative rollout
     # keeps legacy chat as the production default while allowing explicit evals.
     ADAPTIVE_V2_PLANNER_ENABLED: bool = False
+    TELEMETRY_ENABLED: bool = True
+    TELEMETRY_SAMPLE_RATE: float = Field(default=1.0, ge=0.0, le=1.0)
+    TELEMETRY_RETENTION_DAYS: int = 30
 
     # CORS / frontend integration
     ALLOWED_CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from datetime import UTC, datetime
+import uuid
 
 from app.curriculum_metadata import SkillDefinition
 from app.database import get_db
@@ -9,6 +10,7 @@ from app.models import ReviewHistory, ReviewItem
 from app.schemas import AdaptiveStateResponse, ReviewResponse, ReviewStartResponse, ReviewSubmission
 from app.services.adaptive import _utc, assess_review_submission, get_state_for_user, get_states_for_user, review_rationale, skill_definition, start_due_review, status_for_state
 from app.services.auth import get_current_user
+from app.services.telemetry import error_category, record
 
 router = APIRouter(prefix="/adaptive", tags=["Adaptive"])
 
@@ -74,7 +76,9 @@ def start_review(review_id: str, db: Session = Depends(get_db), current_user: di
     try:
         attempt = start_due_review(db, verified_uid=uid, review_id=review_id)
         db.commit()
-    except ValueError as error:
+    except Exception as error:
+        record(operation_id=str(uuid.uuid4()), operation="review_schedule", success=False,
+               review_scheduling_failure="review_start_failed", error_category=error_category(error))
         raise HTTPException(status_code=404 if str(error) == "review not found" else 409, detail=str(error))
     return ReviewStartResponse(attempt_id=attempt.id, exercise_id=attempt.exercise_id or attempt.id, exercise_text=attempt.prompt_snapshot or "")
 
@@ -87,8 +91,10 @@ def submit_review(review_id: str, payload: ReviewSubmission, db: Session = Depen
     try:
         result = assess_review_submission(db, verified_uid=uid, review_id=review_id, attempt_id=payload.attempt_id, learner_answer=payload.learner_answer)
         db.commit()
-    except ValueError as error:
+    except Exception as error:
         db.rollback()
+        record(operation_id=str(uuid.uuid4()), operation="adaptive_update", success=False,
+               adaptive_update_failure="review_submission_failed", error_category=error_category(error))
         raise HTTPException(status_code=404 if "not found" in str(error) else 409, detail=str(error))
     return {"attempt_id": payload.attempt_id, "event_id": result.event.id, "status": result.event.validation_status,
             # This is the validated outcome stored by the server, not a client-supplied rating.

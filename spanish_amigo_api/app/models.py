@@ -304,3 +304,31 @@ class SystemStatus(Base):
     key: Mapped[str] = mapped_column(String(50), primary_key=True)
     value: Mapped[str] = mapped_column(String(255), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AiTelemetryEvent(Base):
+    """Content-free, append-only operational measurement; deliberately has no user FK."""
+    __tablename__ = "ai_telemetry_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    operation_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    total_duration_ms: Mapped[Optional[float]] = mapped_column(nullable=True)
+    ttft_ms: Mapped[Optional[float]] = mapped_column(nullable=True)
+    model_duration_ms: Mapped[Optional[float]] = mapped_column(nullable=True)
+    retrieval_duration_ms: Mapped[Optional[float]] = mapped_column(nullable=True)
+    assessment_duration_ms: Mapped[Optional[float]] = mapped_column(nullable=True)
+    embedding_duration_ms: Mapped[Optional[float]] = mapped_column(nullable=True)
+    model_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    fallback_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    structured_output_failure: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    assessment_rejection_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    adaptive_update_failure: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    review_scheduling_failure: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    error_category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    __table_args__ = (Index("ix_ai_telemetry_events_occurred_operation", "occurred_at", "operation"),)

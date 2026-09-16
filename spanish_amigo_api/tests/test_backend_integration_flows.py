@@ -1,4 +1,5 @@
 import os
+import asyncio
 import sys
 import tempfile
 import unittest
@@ -17,7 +18,7 @@ os.environ.setdefault("GEMINI_API_KEY", "test-key")
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import get_db
-from app.models import AssessmentEvent, ChatMessage, ChatSession, CompletedLesson, LearnerSkillState, PracticeAttempt, ReviewHistory, ReviewItem, Skill, SystemStatus, User
+from app.models import AiTelemetryEvent, AssessmentEvent, ChatMessage, ChatSession, CompletedLesson, LearnerSkillState, PracticeAttempt, ReviewHistory, ReviewItem, Skill, SystemStatus, User
 from app.curriculum_metadata import SKILLS
 from app.services.adaptive import create_assessment_event, create_practice_attempt, create_unknown_state
 from app.schemas import AssessmentProposal
@@ -63,6 +64,13 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         PracticeAttempt.__table__.create(bind=cls.engine, checkfirst=True)
         ReviewHistory.__table__.create(bind=cls.engine, checkfirst=True)
         SystemStatus.__table__.create(bind=cls.engine, checkfirst=True)
+        AiTelemetryEvent.__table__.create(bind=cls.engine, checkfirst=True)
+
+        # Phase 4 telemetry opens its own session.  Keep that session inside
+        # this integration fixture's SQLite database rather than allowing a
+        # test request to reach the application's configured database.
+        cls.telemetry_session_local = patch("app.services.telemetry.SessionLocal", cls.TestSessionLocal)
+        cls.telemetry_session_local.start()
 
         def _override_db():
             db = cls.TestSessionLocal()
@@ -78,6 +86,7 @@ class TestBackendIntegrationFlows(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.dependency_overrides.clear()
+        cls.telemetry_session_local.stop()
         cls.engine.dispose()
         cls.temp_dir.cleanup()
 
@@ -561,6 +570,58 @@ class TestBackendIntegrationFlows(unittest.TestCase):
         self.assertIn('"token": "Hola"', body)
         self.assertIn('"token": " amigo"', body)
         self.assertIn("[DONE]", body)
+
+    @patch("app.routers.chat.record")
+    @patch("app.routers.chat.time.perf_counter", side_effect=(10.0 + i for i in range(100)))
+    @patch("app.routers.chat.update_session_title_in_background", return_value=None)
+    @patch("app.services.ai.save_memory_node", return_value={})
+    @patch("app.services.ai.prepare_tutor_messages", return_value=[HumanMessage(content="planned")])
+    @patch("app.services.ai.guardrails_node", return_value={"guardrail_blocked": False})
+    @patch("app.routers.chat.astream_with_fallback")
+    def test_stream_ttft_is_first_real_token_and_total_is_recorded(
+        self, mock_astream, _mock_guardrails, _mock_prepare, _mock_save,
+        _mock_title, mock_clock, mock_record,
+    ):
+        async def _fake_stream(*_args, **_kwargs):
+            class Chunk:
+                def __init__(self, content, tool_calls=None):
+                    self.content = content
+                    self.tool_calls = tool_calls or []
+            yield Chunk("")
+            yield Chunk("", [{"name": "toggle_theme"}])
+            yield Chunk("Hola")
+            yield Chunk(" amigo")
+        mock_astream.side_effect = _fake_stream
+        response = self.client.post("/chat/send_stream", json={"user_id": "user-a", "message": "Hola", "session_id": None})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"session_id"', response.text)
+        self.assertIn('"token": "Hola"', response.text)
+        self.assertIn('"token": " amigo"', response.text)
+        self.assertIn("[DONE]", response.text)
+        telemetry = mock_record.call_args.kwargs
+        self.assertGreater(telemetry["ttft_ms"], 0)
+        self.assertGreaterEqual(telemetry["total_duration_ms"], telemetry["ttft_ms"])
+        self.assertEqual(mock_record.call_count, 1)
+
+    @patch("app.routers.chat.record")
+    @patch("app.routers.chat.update_session_title_in_background", return_value=None)
+    @patch("app.services.ai.save_memory_node", return_value={})
+    @patch("app.services.ai.prepare_tutor_messages", return_value=[HumanMessage(content="planned")])
+    @patch("app.services.ai.guardrails_node", return_value={"guardrail_blocked": False})
+    @patch("app.routers.chat.astream_with_fallback")
+    def test_stream_cancellation_finalizes_telemetry_once(
+        self, mock_astream, _mock_guardrails, _mock_prepare, _mock_save,
+        _mock_title, mock_record,
+    ):
+        async def _cancelled(*_args, **_kwargs):
+            raise asyncio.CancelledError()
+            yield  # pragma: no cover
+        mock_astream.side_effect = _cancelled
+        response = self.client.post("/chat/send_stream", json={"user_id": "user-a", "message": "Hola", "session_id": None})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text.count("session_id"), 1)
+        self.assertNotIn("data: {token", response.text)
+        self.assertEqual(mock_record.call_count, 1)
 
     @patch("app.routers.chat.update_session_title_in_background", return_value=None)
     @patch("app.services.ai.save_memory_node", return_value={})

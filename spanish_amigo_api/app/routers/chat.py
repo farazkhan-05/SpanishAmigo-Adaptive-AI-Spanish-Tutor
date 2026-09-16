@@ -1,4 +1,6 @@
 import logging
+import time
+import uuid
 import asyncio
 import json
 from datetime import datetime
@@ -13,6 +15,7 @@ from app.models import ChatMessage, CompletedLesson, ChatSession, SystemStatus, 
 from app.schemas import ChatRequest, ChatResponse, ExplainRequest, ExplainResponse, SessionResponse, SessionUpdate
 from app.services.ai import TutorState, tutor_graph, generate_explanation, extract_text_content, generate_chat_title, astream_with_fallback, plan_turn
 from app.services.auth import get_current_user
+from app.services.telemetry import error_category, first_token_timestamp, record, token_fields
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
 logger = logging.getLogger("spanish-amigo-ai")
@@ -170,6 +173,8 @@ def send_chat_message(
     db: Session = Depends(get_db), 
     current_user: dict = Depends(get_current_user)
 ):
+    telemetry_started = time.perf_counter()
+    telemetry_id = str(uuid.uuid4())
     # Retrieve verified Firebase UID as primary source of truth
     verified_user_id = current_user.get("uid")
 
@@ -267,12 +272,20 @@ def send_chat_message(
                     reply_content = "¡Claro! Switched the theme. 😎"
                     break
 
+        execution_metadata = output.get("execution_metadata", {})
+        record(operation_id=telemetry_id, operation="chat_send", success=True,
+               total_duration_ms=(time.perf_counter() - telemetry_started) * 1000,
+               model_name=execution_metadata.get("model_name"), fallback_used=bool(execution_metadata.get("fallback_used", False)),
+               retry_count=int(execution_metadata.get("retry_count", 0)), **token_fields(execution_metadata.get("usage_metadata")))
         return ChatResponse(
             reply=reply_content,
             action_required=action_required,
             session_id=active_session_id
         )
     except Exception as e:
+        record(operation_id=telemetry_id, operation="chat_send", success=False,
+               total_duration_ms=(time.perf_counter() - telemetry_started) * 1000,
+               error_category=error_category(e))
         logger.error(f"Tutor graph execution failed: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
@@ -287,6 +300,8 @@ def send_chat_message_stream(
     db: Session = Depends(get_db), 
     current_user: dict = Depends(get_current_user)
 ):
+    telemetry_started = time.perf_counter()
+    telemetry_id = str(uuid.uuid4())
     # Retrieve verified Firebase UID as primary source of truth
     verified_user_id = current_user.get("uid")
 
@@ -371,6 +386,16 @@ def send_chat_message_stream(
     }
 
     async def sse_generator():
+        first_token_at = None
+        model_started = None
+        model_name = None
+        fallback_used = False
+        retry_count = 0
+        assessment_duration = None
+        rejection_reason = None
+        usage = {}
+        execution_metadata = {}
+        failure = None
         try:
             # 1. Yield active session ID immediately so client can bind new conversations instantly
             yield f"data: {json.dumps({'session_id': active_session_id})}\n\n"
@@ -378,6 +403,11 @@ def send_chat_message_stream(
             # 2. Complete the same authoritative deterministic/adaptive plan used by
             # /send before response delivery begins.
             turn_plan = await asyncio.to_thread(_plan_turn_with_fresh_db, state_input)
+            assessment_duration = turn_plan.assessment_latency_ms
+            retrieval_duration = turn_plan.retrieval_latency_ms
+            embedding_duration = turn_plan.embedding_latency_ms
+            rejection_reason = turn_plan.validation.reason if turn_plan.validation else None
+            usage = token_fields(turn_plan.assessment_token_usage)
 
             if turn_plan.guardrail_blocked:
                 # Guardrails blocked: stream the off-topic reply word-by-word for premium feel
@@ -385,6 +415,7 @@ def send_chat_message_stream(
                 words = reply_text.split()
                 for i, w in enumerate(words):
                     space = " " if i > 0 else ""
+                    first_token_at = first_token_timestamp(first_token_at, space + w, time.perf_counter())
                     yield f"data: {json.dumps({'token': space + w})}\n\n"
                     await asyncio.sleep(0.02)
 
@@ -403,9 +434,11 @@ def send_chat_message_stream(
             action_required = None
 
             with SessionLocal() as stream_db:
-                async for chunk in astream_with_fallback(tutor_messages, stream_db, bind_toggle_theme=True):
+                model_started = time.perf_counter()
+                async for chunk in astream_with_fallback(tutor_messages, stream_db, bind_toggle_theme=True, metadata=execution_metadata):
                     content = extract_text_content(chunk.content)
                     if content:
+                        first_token_at = first_token_timestamp(first_token_at, content, time.perf_counter())
                         full_reply_text += content
                         yield f"data: {json.dumps({'token': content})}\n\n"
 
@@ -429,8 +462,8 @@ def send_chat_message_stream(
 
             # 6. Signal stream completion
             yield "data: [DONE]\n\n"
-
         except Exception as stream_err:
+            failure = stream_err
             logger.error(
                 "[SSE] Response generator error for session_id=%s user_id=%s: %s",
                 active_session_id,
@@ -440,6 +473,18 @@ def send_chat_message_stream(
             )
             yield f"data: {json.dumps({'token': '⚠️ Lo siento, I hit an unexpected error during response generation.'})}\n\n"
             yield "data: [DONE]\n\n"
+        finally:
+            model_name = execution_metadata.get("model_name")
+            fallback_used = bool(execution_metadata.get("fallback_used", False))
+            retry_count = int(execution_metadata.get("retry_count", 0))
+            total = (time.perf_counter() - telemetry_started) * 1000
+            record(operation_id=telemetry_id, operation="chat_send_stream", success=failure is None,
+                   total_duration_ms=total, ttft_ms=((first_token_at - telemetry_started) * 1000 if first_token_at else None),
+                   model_duration_ms=((time.perf_counter() - model_started) * 1000 if model_started else None),
+                   assessment_duration_ms=assessment_duration, model_name=model_name, fallback_used=fallback_used,
+                   retrieval_duration_ms=retrieval_duration, embedding_duration_ms=embedding_duration,
+                   retry_count=retry_count, assessment_rejection_reason=rejection_reason,
+                   error_category=error_category(failure) if failure else None, **usage)
 
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
 

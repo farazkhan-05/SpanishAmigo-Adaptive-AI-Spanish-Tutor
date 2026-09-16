@@ -1,13 +1,15 @@
 # SpanishAmigo
 
-SpanishAmigo is a full-stack Spanish language learning web application that combines structured beginner lessons with an AI tutor named Lumi, real-time conversational practice, semantic curriculum retrieval, and deterministic adaptive skill tracking.
+SpanishAmigo is a full-stack Spanish language learning web application that combines structured beginner lessons with an AI conversational tutor named Lumi, semantic curriculum retrieval, and deterministic adaptive skill tracking.
 
-The frontend is built with React, Vite, Material UI, and Tailwind CSS. The backend is a FastAPI service that verifies Firebase authentication tokens, persists learner progress and chat history in PostgreSQL, orchestrates Google Gemini models through LangGraph, and schedules spaced repetition reviews using the Free Spaced Repetition Scheduler (FSRS) algorithm.
+The frontend is built with React 19, Vite, Material UI, and Tailwind CSS. The backend is a FastAPI service that verifies Firebase authentication tokens, persists learner progress and chat history in PostgreSQL with pgvector, orchestrates Google Gemini models through LangGraph, and schedules spaced repetition reviews using the Free Spaced Repetition Scheduler (FSRS).
 
 Live application:
 * Frontend: [https://spanishamigo.vercel.app](https://spanishamigo.vercel.app)
 * Backend API: [https://spanish-amigo-api.vercel.app](https://spanish-amigo-api.vercel.app)
 * Health endpoint: [https://spanish-amigo-api.vercel.app/health](https://spanish-amigo-api.vercel.app/health)
+
+Production deployment status: The live URLs above run the verified production baseline (`c6d7e8f9a0b1`). Changes in the `feature/final-engineering-upgrade` release candidate (including model upgrade to `gemini-3.5-flash-lite`, telemetry, and targeted practice linkages in migrations `d2e3f4a5b6c7` and `e1782f3a4b5c`) represent release-candidate code pending deployment.
 
 ## Architecture
 
@@ -15,7 +17,7 @@ SpanishAmigo separates student interactions into two operational layers: an inte
 
 ```mermaid
 flowchart TD
-    Client["React / Vite Frontend (Vercel)"]
+    Client["React 19 / Vite Frontend (Vercel)"]
     Auth["Firebase Authentication"]
     API["FastAPI Backend (Vercel)"]
     DB[("Neon PostgreSQL 18 + pgvector")]
@@ -23,7 +25,8 @@ flowchart TD
     LLM["Google Gemini (gemini-3.5-flash-lite)"]
     Embed["Google Gemini Embeddings (gemini-embedding-2)"]
     Validator["Deterministic Validator"]
-    FSRS["FSRS Review Engine"]
+    FSRS["FSRS Review Engine (py-fsrs)"]
+    Telem["AI Telemetry Service"]
 
     Client -->|"ID Token"| Auth
     Client -->|"REST / SSE Streaming"| API
@@ -34,56 +37,51 @@ flowchart TD
     Orch -->|"Contextual Chat / Assessment Proposals"| LLM
     Embed -->|"768-dim Vectors"| DB
     LLM -->|"Proposals"| Validator
-    Validator -->|"Assessment Events (Audit / Policy)"| DB
+    Validator -->|"Assessment Events (Audit)"| DB
     API -->|"Review Submissions & Practice"| FSRS
     FSRS -->|"Learner States & Review Cards"| DB
     DB -->|"Adaptive Skill Metrics"| API
     API -->|"My Spanish Dashboard"| Client
+    API -.->|"Non-fatal Metrics"| Telem
+    Telem -.->|"Content-free Logs"| DB
 ```
 
-The system components interact as follows:
+System components:
 
-1. **Frontend interface**: The client renders lesson progression, exercise interactions, audio playback, voice capture, and a persistent chat interface for Lumi.
-2. **Authentication**: Firebase Authentication manages anonymous guest sessions and Google account linking. ID tokens are passed in HTTP request authorization headers.
+1. **Frontend interface**: Renders lesson progression, exercise interactions, audio playback, voice capture, and a persistent chat interface for Lumi.
+2. **Authentication**: Firebase Authentication manages anonymous guest sessions and Google account linking. ID tokens are transmitted in HTTP Authorization headers.
 3. **Backend API**: FastAPI validates request payloads with Pydantic, verifies user identity against Firebase Admin SDK, and routes requests to database services or the LangGraph AI engine.
-4. **Retrieval and vector search**: PostgreSQL with the `pgvector` extension stores 768-dimensional embeddings of all curriculum lesson slides. Queries retrieve relevant lesson content to ground tutor responses in taught material.
-5. **Adaptive skill evaluation**: When a learner interacts with Lumi, Gemini proposes structured assessment events that a deterministic validator checks before recording audit events in the database to guide pedagogical decisions. For server-issued review exercises, accepted eligible practice attempts execute deterministic state transitions that update learner skill states and FSRS review schedules.
+4. **Retrieval and vector search**: PostgreSQL with pgvector stores 768-dimensional embeddings of all curriculum lesson slides. Queries retrieve relevant lesson content to ground tutor responses in taught material.
+5. **Adaptive skill evaluation**: When a learner converses with Lumi, Gemini proposes structured assessment events that a deterministic validator checks before recording audit events. For server-issued review exercises, accepted eligible practice attempts trigger deterministic state transitions that update learner skill states and FSRS review schedules.
+6. **Telemetry service**: Asynchronous, non-fatal logging records operational metrics (latencies, TTFT, token usage, failure classifications) without persisting learner message content or user IDs.
 
-## Learner experience
+## Learner experience and Lumi AI tutor
 
 The application provides a structured progression for beginner Spanish students:
 
-* **Five core lessons**: Structured modules covering foundational Spanish (greetings, survival expressions, politeness, directions, and café ordering).
+* **Five core lessons**: Modules covering foundational A1 Spanish (greetings, survival expressions, politeness, directions, and café ordering).
 * **Course map**: Visual navigation path tracking lesson unlocking, progress metrics, completion status, and achievement badges.
-* **Interactive lesson player**: Modular slide flow providing context cards, translation reveals with instant AI explanations, and practice quiz slides with immediate feedback and hints.
-* **Lumi AI tutor**: Floating conversational tutor available globally across the application and within individual lessons.
-* **Real-time streaming chat**: Tutor responses stream incrementally via Server-Sent Events (SSE) with error recovery fallbacks.
-* **Voice input and speech output**: Web Speech API integration for microphone input and spoken tutor pronunciation.
+* **Interactive lesson player**: Modular slide flow providing context cards, translation reveals with unmetered AI explanations, and practice quiz slides with immediate feedback and hints.
+* **Lumi AI conversational tutor**: Conversational tutor available globally across the application and within individual lessons.
+  * **Model configuration**: Release-candidate primary model is `gemini-3.5-flash-lite`, with automatic fallback to `gemma-4-31b-it` upon quota exhaustion.
+  * **Conversational style**: Lumi produces concise, proportional responses matched to the learner's turn length. Casual greetings and small talk receive natural replies without turning into service interactions ("How can I help you?").
+  * **Pedagogical boundaries**: Lumi answers specific questions directly without unsolicited mini-lessons, lectures, or unrequested grammar drills.
+  * **Clean formatting**: Responses avoid decorative emojis, excessive bolding, and mechanical bracket translations (`palabra [word]`). Translations are woven naturally into prose.
+  * **Direct corrections**: Lumi corrects actual errors concisely (1-3 sentences) without over-correcting acceptable Spanish variants (such as optional subject pronouns).
+  * **Identity and transparency**: Lumi truthfully identifies as an AI tutor when asked.
+  * **Clean start**: New chat sessions start with an empty transcript and a subtle hint ("Ask Lumi anything about Spanish.") rather than a synthetic greeting. The composer uses the placeholder "Message Lumi...".
+* **Real-time streaming chat**: Tutor responses stream incrementally via Server-Sent Events (SSE) with fallback recovery.
+* **Voice input and speech output**: Web Speech API integration for microphone input and spoken tutor pronunciation (with markdown and emoji stripped before speech synthesis).
 * **Session management**: Multi-session chat history allowing learners to create, switch, rename, and delete conversation threads.
 * **Authentication flexibility**: Immediate guest access with local storage backup, with seamless upgrade to Google sign-in to persist cross-device progress.
-* **Visual customization**: Full support for light and dark themes, toggled manually or requested conversationally through Lumi.
+* **Theme customization**: Light and dark themes, toggled manually in the UI or conversationally through Lumi.
 
-## Adaptive learning system
+## AI and learning flow
 
-SpanishAmigo implements an adaptive tracking architecture (Adaptive V2) that separates course completion from skill mastery. Completing slides advances course navigation, while skill mastery requires verified recall over time.
-
-### Core curriculum taxonomy
-
-The curriculum defines 14 stable educational skills across four currently used categories:
-
-* **Pronunciation**: `pronunciation.silent-h` (speech required).
-* **Communication**: `communication.greetings`, `communication.formal-informal-address`, `communication.introductions-farewells`, `communication.politeness`, `communication.asking-directions`, `communication.cafe-ordering` (contextual).
-* **Grammar**: `grammar.gender-agreement`, `grammar.present-tense-querer`, `grammar.present-tense-tener`.
-* **Vocabulary**: `vocabulary.survival-needs`, `vocabulary.dining-basics`, `vocabulary.places-directions`, `vocabulary.cafe-items`.
-
-Across the 5 lessons containing 231 total slides, 222 slides participate in skill mappings through 382 explicit associations, with 9 slides left intentionally unmapped where content does not test an atomic skill.
-
-### The validation boundary and adaptive pathways
-
-A foundational architectural rule governs skill mastery: **the language model may propose an assessment, but application code decides whether that proposal is valid evidence, and only eligible practice attempts can mutate mastery state.**
+SpanishAmigo maintains a strict safety boundary between language model generation and learner skill mastery:
 
 ```text
-Conversational Assessment Flow (Path A):
+Conversational Assessment Flow (Audit Only):
 Learner Chat Turn -> Assessability Gate -> Gemini Proposal -> Deterministic Validator
                                                                    |
                             +--------------------------------------+--------------------------------------+
@@ -95,7 +93,7 @@ Learner Chat Turn -> Assessability Gate -> Gemini Proposal -> Deterministic Vali
           and active pedagogical signal; does NOT mutate                no pedagogical action or state mutation
           learner skill states or schedule FSRS reviews
 
-Eligible Practice and Review Flow (Path B):
+Eligible Practice and Review Flow (Mastery Mutation):
 Server-Issued Review Practice -> Learner Submission -> Validator Acceptance -> Eligible PracticeAttempt
                                                                                       |
                                                                                       v
@@ -108,10 +106,31 @@ Server-Issued Review Practice -> Learner Submission -> Validator Acceptance -> E
                              (mastery estimate & confidence)                                                       (stability, difficulty, due date)
 ```
 
-The system strictly distinguishes between two processing paths:
+The system execution flow proceeds through eight distinct stages:
 
-* **Path A: Conversational assessment**: During live chat with Lumi, learner messages pass through an assessability gate. If assessable Spanish production is present, Gemini proposes an assessment that is verified by the deterministic validator. Accepted outcomes are persisted to `assessment_events` as audit evidence and inform Lumi's pedagogical policy (such as providing explanations, hints, or practice prompts). Chat assessments do not directly create eligible `practice_attempts`, modify `learner_skill_states`, or change FSRS review cards. An accepted incorrect or partial atomic text assessment may instead produce one server-owned targeted-practice recommendation.
-* **Path B: Eligible practice and review evidence**: State mutation and spaced repetition scheduling require an explicit, eligible `PracticeAttempt` linked to a server-issued exercise. Targeted practice and due-review submissions undergo the same deterministic validation. If accepted, `process_accepted_evidence` transactionally updates `learner_skill_states` (computing mastery estimates and confidence), calculates FSRS card stability and difficulty, updates `review_items`, and records an immutable log in `review_history`.
+1. **Learner message**: The learner sends a text or voice message to Lumi.
+2. **Curriculum retrieval**: Semantic vector search retrieves up to 3 relevant lesson slides (cosine distance < 0.65) to ground the response when curriculum context is relevant.
+3. **Tutor response generation**: The LangGraph engine invokes Gemini to generate a level-appropriate response, streaming tokens via SSE.
+4. **Assessment proposal**: If the learner's turn contains assessable Spanish production, Gemini proposes a structured assessment (skill identifier, result classification, and evidence text).
+5. **Deterministic validation**: Application logic validates the proposal against taxonomy rules, modality constraints, CEFR levels, and evidence spans.
+6. **Chat safety boundary**: Accepted conversational proposals are stored in `assessment_events` as audit logs to inform pedagogical hints or server-owned targeted practice recommendations. Ordinary chat does not mutate learner skill mastery or schedule spaced repetition reviews.
+7. **Eligible practice submission**: When a learner completes a server-issued targeted practice or due-review exercise, an eligible `PracticeAttempt` is submitted.
+8. **Deterministic mastery mutation and FSRS scheduling**: Upon validator acceptance, `process_accepted_evidence` updates `learner_skill_states` (mastery estimate and confidence) and invokes `py-fsrs` to update `review_items` (stability, difficulty, and next due date) and append to `review_history`.
+
+## Adaptive learning system
+
+SpanishAmigo implements an adaptive tracking architecture (Adaptive V2) that separates course completion from skill mastery. Completing lesson slides advances course navigation, while skill mastery requires verified recall over time.
+
+### Curriculum taxonomy
+
+The curriculum defines 14 stable educational skills across four categories:
+
+* **Pronunciation**: `pronunciation.silent-h` (requires speech audio evidence).
+* **Communication**: `communication.greetings`, `communication.formal-informal-address`, `communication.introductions-farewells`, `communication.politeness`, `communication.asking-directions`, `communication.cafe-ordering` (contextual transfer).
+* **Grammar**: `grammar.gender-agreement`, `grammar.present-tense-querer`, `grammar.present-tense-tener`.
+* **Vocabulary**: `vocabulary.survival-needs`, `vocabulary.dining-basics`, `vocabulary.places-directions`, `vocabulary.cafe-items`.
+
+Across the 5 lessons containing 231 total slides, 222 slides participate in skill mappings through 382 explicit associations, with 9 slides left intentionally unmapped where content does not test an atomic skill.
 
 ### Mastery eligibility rules
 
@@ -122,75 +141,75 @@ To prevent invalid state updates, `process_accepted_evidence` and the determinis
 * **Non-atomic skill constraints**: Contextual transfer skills (such as `communication.cafe-ordering`) represent scenario integration rather than atomic mastery and do not mutate numeric mastery states.
 * **Vocabulary domain boundaries**: Broad vocabulary category skills are rejected for atomic text mastery in the validator.
 
-### Safety and validation examples
-
-1. **Conversational grammar demonstration**:
-   * Input: *"Yo quiero un café, por favor."*
-   * Result: Validated and recorded as an accepted assessment event for `grammar.present-tense-querer`, providing a pedagogical signal in chat without mutating learner mastery state.
-2. **Conversational grammar mistake**:
-   * Input: *"Yo tener dos hermanos."*
-   * Result: Validated and recorded as an accepted incorrect assessment event for `grammar.present-tense-tener`, informing Lumi's response without directly modifying skill mastery or review queues.
-3. **Server-issued review practice**:
-   * Input: Learner submits *"Yo tengo dos hermanos."* in response to a server-issued review prompt for `grammar.present-tense-tener`.
-   * Result: Validated with an eligible `PracticeAttempt`, triggering `process_accepted_evidence` to update the learner skill state and advance the FSRS review schedule.
-4. **Information request**:
-   * Input: *"Why do we say buenos días instead of buenas días?"*
-   * Result: Identified as a question by the assessability gate. It is answered by Lumi but excluded from assessment proposals and mastery tracking.
-5. **Modality gating**:
-   * Input: Learner types text explaining that the letter H is silent.
-   * Result: Rejected for `pronunciation.silent-h` because pronunciation skills require speech audio evidence.
-
 ### Spaced repetition and "My Spanish"
 
 * **FSRS scheduling**: Validated review submissions feed into the Free Spaced Repetition Scheduler (`py-fsrs` 6.3.2), which computes card stability, difficulty, and next due review timestamps upon completing server-issued exercises.
 * **Review queue**: Due reviews are surfaced through dedicated endpoints (`/adaptive/reviews/due` and `/adaptive/reviews/next`), issuing taxonomy-grounded recall prompts (`/adaptive/reviews/{id}/start`) and evaluating submissions (`/adaptive/reviews/{id}/submit`).
+* **Targeted practice lifecycle**: When a learner makes an assessable mistake in chat, the server may issue an optional targeted practice recommendation (`/adaptive/practice/recommendation`), start the exercise (`/adaptive/practice/start`), and evaluate the submission (`/adaptive/practice/submit`).
 * **My Spanish panel**: A dedicated dashboard organizing the 14 curriculum skills into actionable categories:
   * *Needs practice*: Assessed skills with low mastery estimates or overdue spaced repetition reviews.
   * *Going well*: Assessed skills with high stability and demonstrated recall.
   * *Not assessed*: Skills where the learner has not yet completed validated practice attempts.
 
+For detailed walkthroughs and technical specifications, see [docs/ADAPTIVE_LEARNING_DEMO.md](docs/ADAPTIVE_LEARNING_DEMO.md), [docs/ADAPTIVE_UPGRADE_CONTRACT.md](docs/ADAPTIVE_UPGRADE_CONTRACT.md), and [docs/ADAPTIVE_V2_PRE_RELEASE_AUDIT.md](docs/ADAPTIVE_V2_PRE_RELEASE_AUDIT.md).
+
 ## Retrieval-augmented generation (RAG)
 
-Lumi uses contextual curriculum grounding to ensure responses remain aligned with the student's current learning stage.
+Lumi uses contextual curriculum grounding to ensure responses remain aligned with the student's current learning stage:
 
 1. **Embedding generation**: Lesson slides are vectorized using `gemini-embedding-2`, configured to 768 output dimensions.
-2. **Vector search**: Slides are stored in PostgreSQL using the `pgvector` extension. Cosine distance queries retrieve the top 3 most relevant slides matching the learner's query or current lesson context (distance threshold < 0.65).
-3. **Hybrid retrieval capability**: The repository implements reciprocal rank fusion (RRF, k=60) combining `pgvector` semantic similarity with PostgreSQL full-text search (`tsvector`, `websearch_to_tsquery`, and `ts_rank_cd`). Production retrieval operates on the baseline vector search strategy, while hybrid retrieval remains an evaluation-tested capability.
+2. **Vector search**: Slides are stored in PostgreSQL using the pgvector extension. Cosine distance queries retrieve the top 3 most relevant slides matching the learner's query or current lesson context (distance threshold < 0.65).
+3. **Retrieval strategy**: Production retrieval operates on the baseline vector search strategy (`legacy_semantic`). Experimental hybrid retrieval combining pgvector semantic similarity with PostgreSQL full-text search (`tsvector` and reciprocal rank fusion) was benchmarked and evaluated; because evaluation demonstrated statistically distinguishable recall degradation under paired bootstrap analysis and higher latency, `legacy_semantic` remains the authoritative production strategy. Detailed benchmark data is documented in [EVALUATION.md](EVALUATION.md).
 4. **Prompt orchestration**: Retrieved slide excerpts, conversation history, and learner skill contexts are injected into a LangGraph state graph to generate accurate, level-appropriate explanations.
+
+## Observability and telemetry
+
+The backend includes a lightweight, privacy-safe AI telemetry service for operational visibility:
+
+* **Configuration**: Controlled via `TELEMETRY_ENABLED` (default `true`), `TELEMETRY_SAMPLE_RATE` (default `1.0`, sampling applied only to successful events; failures are always retained), and `TELEMETRY_RETENTION_DAYS` (default `30`).
+* **Non-fatal execution**: Telemetry writes run in separate database sessions and catch write failures, ensuring database logging issues never disrupt learner-facing chat or review requests.
+* **Recorded metrics**: Tracks total duration, time-to-first-token (TTFT measured on first non-empty text token), model execution time, retrieval time, assessment proposal time, embedding time, model name, fallback status, retry count, token counts (`input_tokens`, `output_tokens`, `total_tokens` from provider metadata when available), and failure classifications (structured output failures, assessment rejection reasons, adaptive update failures, review scheduling failures, error categories).
+* **Privacy-safe design**: Telemetry explicitly avoids recording prompt text, completion text, learner messages, or user identifiers (UIDs).
+* **Local CLI reporting and pruning**:
+  ```powershell
+  cd spanish_amigo_api
+  uv run python -m app.telemetry_cli --hours 24
+  uv run python -m app.telemetry_cli --prune
+  ```
 
 ## Technology inventory
 
 ### Frontend
-* **React 19 & Vite**: Single-page application build tooling and runtime.
-* **React Router 7**: Client-side declarative routing with SPA rewrite support.
-* **Material UI & Tailwind CSS 4**: Design system, responsive layout primitives, and styling tokens.
-* **Lucide React**: Vector iconography.
-* **Firebase JS SDK**: Client-side authentication and session token handling.
+* **React 19 & Vite 7**: Single-page application build tooling and runtime (`react` 19.2.0, `vite` 7.2.4).
+* **React Router 7**: Client-side declarative routing with SPA rewrite support (`react-router-dom` 7.13.0).
+* **Material UI 7 & Tailwind CSS 4**: Component library, responsive layout primitives, and styling tokens (`@mui/material` 7.3.7, `tailwindcss` 4.1.18).
+* **Lucide React**: Vector iconography (`lucide-react` 0.563.0).
+* **Firebase JS SDK**: Client-side authentication and session token handling (`firebase` 12.9.0).
+* **React Markdown**: Client-side Markdown rendering for tutor messages (`react-markdown` 10.1.0).
 
 ### Backend
-* **FastAPI & Uvicorn**: Asynchronous REST and Server-Sent Events API.
-* **Pydantic & Pydantic Settings**: Strict data validation, schema enforcement, and environment parsing.
-* **SQLAlchemy 2.0 & Alembic**: Object-relational mapping, connection pooling, and database schema migrations.
-* **psycopg 3**: PostgreSQL database adapter.
-* **Firebase Admin SDK**: Server-side cryptographic token verification.
-* **LangChain & LangGraph**: AI agent orchestration, tool routing, state graphs, and memory management.
-* **Google GenAI SDK & langchain-google-genai**: Model access for `gemini-3.5-flash-lite` and `gemini-embedding-2`.
-* **py-fsrs**: Implementation of the Free Spaced Repetition Scheduler algorithm.
+* **FastAPI & Uvicorn**: Asynchronous REST and Server-Sent Events API (`fastapi` 0.136.1, `uvicorn` 0.47.0).
+* **Pydantic & Pydantic Settings**: Data validation, schema enforcement, and environment parsing (`pydantic-settings` 2.14.2).
+* **SQLAlchemy 2.0 & Alembic**: Typed ORM, connection pooling, and database schema migrations (`sqlalchemy` 2.0.49, `alembic` 1.18.4).
+* **psycopg 3**: PostgreSQL database adapter (`psycopg` 3.3.4).
+* **Firebase Admin SDK**: Server-side cryptographic token verification (`firebase-admin` 7.4.0).
+* **LangChain & LangGraph**: AI agent orchestration, tool routing, state graphs, and memory management (`langgraph` 1.2.0, `langchain-google-genai` 4.2.2).
+* **Google GenAI SDK**: Model access for `gemini-3.5-flash-lite` (primary default), `gemma-4-31b-it` (fallback), and `gemini-embedding-2`.
+* **py-fsrs**: Implementation of the Free Spaced Repetition Scheduler algorithm (`fsrs` 6.3.2).
 
 ### Infrastructure and tooling
-* **PostgreSQL 18 (Neon)**: Relational database with `pgvector` extension.
+* **PostgreSQL 18 (Neon)**: Relational database with pgvector extension.
 * **Vercel**: Production hosting for frontend and backend deployments.
-* **uv**: Python package management and virtual environment management.
+* **uv**: Deterministic Python package management and virtual environment execution.
 * **npm**: Node.js package management.
-* **Docker**: Containerized deployment specification.
+* **Docker**: Containerized deployment specification (`spanish_amigo_api/Dockerfile`).
 * **GitHub Actions**: Continuous integration, static analysis, unit testing, and dependency vulnerability scanning.
 * **mypy**: Static type analysis for backend Python code.
 * **pip-audit & npm audit**: Automated vulnerability auditing for Python and JavaScript dependencies.
 
-## Database schema
+## Database schema and migrations
 
-The database schema is managed through Alembic. The release-candidate repository head is `e1782f3a4b5c`; the
-previously deployed production head is `c6d7e8f9a0b1`.
+The database schema is managed through Alembic. The release-candidate repository head is `e1782f3a4b5c`; the previously deployed production head is `c6d7e8f9a0b1`.
 
 ```text
 users
@@ -199,7 +218,7 @@ users
   |     `-- chat_messages (session_id -> chat_sessions.id)
   |-- learner_skill_states (user_id -> users.id, skill_id -> skills.skill_id)
   |-- assessment_events (user_id -> users.id, skill_id -> skills.skill_id)
-  |-- practice_attempts (user_id -> users.id, skill_id -> skills.skill_id)
+  |-- practice_attempts (user_id -> users.id, skill_id -> skills.skill_id, source_assessment_event_id -> assessment_events.id)
   |-- review_items (user_id -> users.id, skill_id -> skills.skill_id)
         `-- review_history (review_item_id -> review_items.id)
 
@@ -207,24 +226,38 @@ skills
   `-- lesson_slide_skills (skill_id -> skills.skill_id, lesson_slide_id -> lesson_slides.id)
         `-- lesson_slides (stores content, 768-dim embeddings, tsvector)
 
-system_status (key-value application status and seed tracking)
+ai_telemetry_events (operational latency, token, and failure metrics; content-free)
+
+system_status (key-value application status, fallback tracking, and anonymous quotas)
 ```
+
+### Alembic migration sequence
+
+1. `2abc84cbeaea`: Initial schema (`users`, `completed_lessons`, `chat_messages`).
+2. `e0671c685099`: Add `chat_sessions` table and session foreign keys.
+3. `f1a2c3d4e5f6`: Ensure `lesson_slides` and `system_status` tables exist.
+4. `a3b4c5d6e7f8`: Adaptive curriculum metadata (`skills`, `lesson_slide_skills`, pgvector embeddings, full-text search).
+5. `b4c5d6e7f8a9`: Adaptive learner evidence storage (`learner_skill_states`, `assessment_events`, `practice_attempts`).
+6. `c6d7e8f9a0b1`: Adaptive mastery mutation and FSRS review scheduling (`review_items`, `review_history`) - **previously verified deployed production head**.
+7. `d2e3f4a5b6c7`: Privacy-safe AI telemetry events (`ai_telemetry_events`) - **release-candidate migration (pending production deployment)**.
+8. `e1782f3a4b5c`: Targeted practice linkage (`source_assessment_event_id` foreign key and unique index on `practice_attempts`) - **release-candidate repository head (pending production deployment)**.
 
 ### Table descriptions
 
-* `users`: Stores user identity, primary key matching the Firebase UID string.
-* `completed_lessons`: Records lesson completions per learner, constrained by unique `(user_id, lesson_id)`.
+* `users`: User records keyed by Firebase UID string.
+* `completed_lessons`: Completed lesson records per learner, unique on `(user_id, lesson_id)`.
 * `chat_sessions`: Named multi-session conversation threads belonging to users.
 * `chat_messages`: Individual user and assistant turns linked to sessions.
-* `lesson_slides`: Course curriculum slides, slide types, explanations, 768-dimensional `pgvector` embeddings, CEFR levels, difficulties, learning objectives, and `tsvector` full-text search columns.
+* `lesson_slides`: Curriculum slide content, slide types, explanations, 768-dimensional pgvector embeddings, CEFR levels, and `tsvector` full-text search columns.
 * `skills`: The 14 stable curriculum skills with category, difficulty, CEFR level, and assessment mode constraints.
 * `lesson_slide_skills`: Join table mapping lesson slides to curriculum skill IDs.
 * `learner_skill_states`: Per-learner skill state tracking mastery estimates (0.0 to 1.0), confidence levels, accepted evidence counts, and attempt histories.
 * `assessment_events`: Append-only audit log of proposed and validated assessment items, error classifications, evidence spans, and validator decisions.
-* `practice_attempts`: Recorded practice submissions, snapshotting prompts, student answers, assistance levels, and recall outcomes.
-* `review_items`: FSRS card state per user and skill, tracking card status, stability, difficulty, and next due timestamp.
+* `practice_attempts`: Recorded practice submissions, snapshotting prompts, student answers, assistance levels, recall outcomes, and optional source assessment event linkage.
+* `review_items`: FSRS card state per user and skill, tracking stability, difficulty, and next due timestamp.
 * `review_history`: Immutable log of FSRS scheduler transitions and card rating changes.
-* `system_status`: Application state keys and metadata tracking.
+* `ai_telemetry_events`: Content-free operational metrics recording execution latencies, TTFT, token usage, fallback status, and failure categories.
+* `system_status`: Application key-value status, model fallback expiration tracking, and anonymous chat quotas.
 
 ## Repository structure
 
@@ -235,14 +268,14 @@ system_status (key-value application status and seed tracking)
 |   `-- workflows/
 |       |-- backend-ci.yml          # Python tests, mypy, and lockfile validation
 |       `-- dependency-security.yml # pip-audit, npm audit, and dependency review
-|-- docs/                           # Architecture references and development guides
+|-- docs/                           # Architecture references, demo steps, and audits
 |-- public/                         # Static assets and favicon
 |-- src/
 |   |-- api/                        # Frontend API client endpoints
 |   |-- components/
 |   |   |-- auth/                   # Authentication modal and trigger components
-|   |   |-- chat/                   # Floating chat widget, session manager, voice
-|   |   |-- common/                 # Reusable UI components
+|   |   |-- chat/                   # Floating chat widget, session manager, voice input
+|   |   |-- common/                 # Reusable UI primitives
 |   |   |-- course/                 # Course map journey, panels, and My Spanish
 |   |   |-- layout/                 # Main application shell and navigation
 |   |   `-- lesson/                 # Context, reveal, quiz, and completion slides
@@ -250,25 +283,27 @@ system_status (key-value application status and seed tracking)
 |   |-- data/
 |   |   `-- lessons/                # Frontend lesson content definitions (Lessons 1-5)
 |   |-- hooks/                      # Custom React hooks
-|   |-- pages/                      # Top-level view routes (CourseMap, LessonPlayer)
+|   |-- pages/                      # View routes (CourseMap, LessonPlayer)
 |   `-- theme/                      # MUI and Tailwind design tokens
 |-- spanish_amigo_api/
 |   |-- app/
 |   |   |-- routers/                # API routes (adaptive, chat, progress)
-|   |   |-- services/               # Core services (adaptive, ai, auth, retrieval)
+|   |   |-- services/               # Core services (adaptive, ai, auth, retrieval, telemetry)
 |   |   |-- config.py               # Pydantic Settings configuration
 |   |   |-- curriculum_metadata.py  # 14 skills, taxonomy, and slide mappings
 |   |   |-- database.py             # SQLAlchemy session and engine setup
 |   |   |-- models.py               # SQLAlchemy database models
-|   |   `-- schemas.py              # Pydantic request and response schemas
-|   |-- evals/                      # Offline evaluation datasets and runners
-|   |-- migrations/                 # Alembic migration versions (release-candidate head: e1782f3a4b5c)
+|   |   |-- schemas.py              # Pydantic request and response schemas
+|   |   `-- telemetry_cli.py        # Telemetry reporting and pruning CLI
+|   |-- evals/                      # Offline evaluation datasets, test runners, and reports
+|   |-- migrations/                 # Alembic migration versions (repository head: e1782f3a4b5c)
 |   |-- tests/                      # Unit and integration test suites
 |   |-- Dockerfile                  # Container definition for backend service
 |   |-- main.py                     # FastAPI application entry point
 |   |-- pyproject.toml              # Python project metadata and dependencies
 |   |-- seed_embeddings.py          # Idempotent curriculum and embedding backfill
 |   `-- uv.lock                     # Deterministic Python dependency lockfile
+|-- EVALUATION.md                   # Authoritative evaluation benchmarks, methodology, and metrics
 |-- index.html
 |-- package.json
 |-- package-lock.json
@@ -393,7 +428,7 @@ curl http://127.0.0.1:8000/health
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `ENV` | Application runtime environment name. | `development` |
+| `ENV` | Application runtime environment name (`development`, `production`). | `development` |
 | `DATABASE_URL` | PostgreSQL connection URI (`postgresql+psycopg://...`). | Required |
 | `GEMINI_API_KEY` | Google Gemini API key for chat, RAG, and embeddings. | Required |
 | `FIREBASE_PROJECT_ID` | Firebase project ID used for token verification. | `spanishamigo-8016a` |
@@ -404,34 +439,30 @@ curl http://127.0.0.1:8000/health
 | `GEMINI_PRIMARY_MODEL` | Primary model for conversational tutoring and assessment. | `gemini-3.5-flash-lite` |
 | `GEMINI_BACKUP_MODEL` | Fallback model used upon primary quota exhaustion. | `gemma-4-31b-it` |
 | `GEMINI_EMBEDDING_MODEL` | Embedding model for semantic slide retrieval. | `gemini-embedding-2` |
-| `ADAPTIVE_V2_PLANNER_ENABLED` | Feature flag activating the Adaptive V2 assessment engine. | `false` |
+| `ADAPTIVE_V2_PLANNER_ENABLED` | Feature flag activating the Adaptive V2 assessment engine. | `false` (source default; `true` in verified production) |
 | `TELEMETRY_ENABLED` | Enables persistent, content-free AI telemetry. | `true` |
-| `TELEMETRY_SAMPLE_RATE` | Successful-event sampling rate from `0.0` to `1.0`; failures remain retained. | `1.0` |
-| `TELEMETRY_RETENTION_DAYS` | Positive integer telemetry retention/pruning horizon. | `30` |
+| `TELEMETRY_SAMPLE_RATE` | Successful-event sampling rate from `0.0` to `1.0`; failures are always retained. | `1.0` |
+| `TELEMETRY_RETENTION_DAYS` | Telemetry retention and pruning horizon in days. | `30` |
 
-### Production state and activation order
+### Production deployment sequence
 
-The source default for `ADAPTIVE_V2_PLANNER_ENABLED` is `false`; the previously deployed Adaptive V2 baseline was
-verified with the production environment value `true`. This does not mean the telemetry and targeted-practice changes
-on this branch are deployed. The release-candidate migrations `d2e3f4a5b6c7` and `e1782f3a4b5c` remain pending.
-
-When deploying to production, follow this sequence:
+When deploying release-candidate changes to production:
 
 1. Deploy the backend API to the hosting platform.
-2. Execute database schema migrations (`alembic upgrade head`).
-3. Run the curriculum seeding script (`seed_embeddings.py`) to initialize skills and generate embeddings.
+2. Execute database schema migrations (`uv run --locked alembic upgrade head`) to apply migrations `d2e3f4a5b6c7` and `e1782f3a4b5c`.
+3. Run the curriculum seeding script (`uv run --locked python seed_embeddings.py`) to verify skills and slide embeddings.
 4. Verify backend connectivity via the `/health` endpoint.
-5. Preserve the previously verified production environment value `ADAPTIVE_V2_PLANNER_ENABLED=true`; the source
-   default remains `false`.
-6. Verify adaptive endpoints (`/adaptive/state`, `/adaptive/reviews/due`).
+5. Set `ADAPTIVE_V2_PLANNER_ENABLED=true`, `TELEMETRY_ENABLED=true`, `TELEMETRY_SAMPLE_RATE=1.0`, and `TELEMETRY_RETENTION_DAYS=30` in the production environment.
+6. Verify adaptive endpoints (`/adaptive/state`, `/adaptive/reviews/due`, `/adaptive/practice/recommendation`).
 
 ## Authentication and security
 
-* **Firebase token verification**: All protected endpoints require a valid Firebase bearer token. The backend verifies signature integrity, token expiration, and project claims via the Firebase Admin SDK.
-* **Tenant data isolation**: The verified Firebase UID serves as the authoritative partition key for all database entities (completed lessons, chat sessions, messages, skill states, assessment events, and review items).
-* **Anonymous usage quota**: Unauthenticated guest users are signed in anonymously and permitted up to three global chat interactions with Lumi before Google account sign-in is required.
-* **Deterministic validation guardrails**: Assessment proposals from language models are subjected to strict deterministic validation rules, preventing ungrounded LLM output from corrupting learner skill states.
-* **Input boundary constraints**: Request schemas enforce message character limits, string lengths, and parameter types using Pydantic.
+* **Firebase token verification**: Protected endpoints require a valid Firebase bearer token. The backend verifies signature integrity, token expiration, and project claims via the Firebase Admin SDK.
+* **Tenant data isolation**: The verified Firebase UID serves as the authoritative partition key for all database entities (completed lessons, chat sessions, messages, skill states, assessment events, practice attempts, and review items).
+* **Anonymous usage quota**: Unauthenticated guest users are signed in anonymously and permitted up to three global chat interactions with Lumi before Google sign-in is required. Lesson 1 is accessible anonymously; subsequent lessons require sign-in.
+* **Deterministic validation guardrails**: Assessment proposals from language models are subjected to strict deterministic validation rules, preventing ungrounded LLM output from modifying learner skill states.
+* **Content-free telemetry**: Telemetry logging excludes prompts, model completions, and user identifiers.
+* **Input validation**: Request schemas enforce character limits, string lengths, and parameter types using Pydantic.
 * **Dependency security audits**: Automated CI pipelines run `pip-audit`, `npm audit`, Dependabot updates, and GitHub Dependency Review against pinned lockfiles (`uv.lock`, `package-lock.json`).
 
 ## Quality assurance and evaluation
@@ -468,30 +499,27 @@ cd spanish_amigo_api
 uv run --locked --with pip-audit pip-audit --desc
 ```
 
-### Offline evaluation framework
+### Evaluation framework
 
-The repository includes an offline evaluation framework under `spanish_amigo_api/evals/` designed to test tutor behavior and assessment accuracy without external API calls:
+The repository includes offline evaluation suites under `spanish_amigo_api/evals/` to test tutor behavior and assessment accuracy without external API calls:
 
-* `golden_cases.jsonl`: Curated baseline cases verifying conversational and pedagogical boundaries.
+* `golden_cases.jsonl`: Baseline cases verifying conversational and pedagogical boundaries.
 * `phase5_cases.jsonl`: Validation cases verifying deterministic assessability gating, modality checks, and evidence extraction.
 * `phase7_cases.jsonl`: End-to-end evaluation cases for turn planning and pedagogical action selection.
 
 Run offline evaluation suites:
 
-```bash
+```powershell
 cd spanish_amigo_api
-uv run --locked python evals/run_eval.py offline
+uv run --locked python -m evals.run_eval phase7-offline --report evals/reports/phase7-offline.json
+uv run --locked python -m evals.run_eval planner-offline --report evals/reports/phase5-planner.json
 ```
 
-## Deployment
+For comprehensive evaluation methodology, retrieval benchmarks, live Gemini 3.5 upgrade regression results against the historical Gemini 3.1 baseline, and hard safety invariant verification, see [EVALUATION.md](EVALUATION.md).
 
-The production deployment runs on serverless and managed cloud infrastructure:
+## Production deployment
 
-* **Frontend hosting**: Vercel handles static site generation and client-side routing via `vercel.json`.
+* **Frontend hosting**: Vercel handles static site hosting and client-side routing via `vercel.json`.
 * **Backend hosting**: Vercel runs the FastAPI application.
-* **Database**: Neon PostgreSQL 18 provides managed PostgreSQL with the `pgvector` extension.
-* **Container configuration**: `spanish_amigo_api/Dockerfile` provides a standalone Python 3.12 container definition for container-based environments.
-
-## Current scope and boundaries
-
-SpanishAmigo currently provides five structured beginner lessons covering core A1 Spanish concepts. The underlying technical infrastructure (RAG retrieval pipeline, LangGraph state orchestration, deterministic assessment validation, and FSRS spaced repetition scheduling) is designed to support expanded curricula, while the authored lesson content remains focused on foundational beginner scenarios.
+* **Database**: Neon PostgreSQL 18 provides managed PostgreSQL with the pgvector extension.
+* **Container configuration**: `spanish_amigo_api/Dockerfile` provides a standalone Python 3.12 container definition using `uv` for frozen dependency synchronization.

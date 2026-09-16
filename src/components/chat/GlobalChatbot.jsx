@@ -178,15 +178,9 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
   const handleStartNewChat = useCallback(() => {
     bindActiveSessionId(null);
     setIsLoading(false); // Reset active response spinner
-    const userName = user?.displayName || user?.email?.split('@')[0] || "Amigo";
-    setMessages([
-      {
-        role: 'model',
-        text: `¡Hola ${userName}! 👋 Start typing to begin a new conversation. What Spanish vocabulary or grammar would you like to practice today? 🇪🇸`
-      }
-    ]);
+    setMessages([]);
     setIsDrawerOpen(false);
-  }, [bindActiveSessionId, user]);
+  }, [bindActiveSessionId]);
 
   const resetChatForCurrentUser = useCallback((reason = "identity-switch") => {
     setSessions([]);
@@ -807,6 +801,12 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
                     Loading conversation...
                   </Typography>
                 </Box>
+              ) : messages.length === 0 ? (
+                <Box sx={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', height: '100%', p: 2, textAlign: 'center' }}>
+                  <Typography variant="body2" sx={{ color: darkMode ? '#8E8EA8' : '#718096', fontSize: '0.85rem' }}>
+                    Ask Lumi anything about Spanish.
+                  </Typography>
+                </Box>
               ) : (
                 <>
                   {messages.map((msg, idx) => (
@@ -926,7 +926,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
               <TextField
                 fullWidth
                 size="small"
-                placeholder="Ask anything..."
+                placeholder="Message Lumi..."
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 disabled={isLoading}

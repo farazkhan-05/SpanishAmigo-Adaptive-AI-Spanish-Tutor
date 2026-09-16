@@ -162,6 +162,7 @@ credentials*.json
 
 # Local authoring references
 /docs/ai-writing-signs.md
+/docs/ai-writing-signs-expanded.md
 /AGENTS.md
 
 # Allow safe env templates

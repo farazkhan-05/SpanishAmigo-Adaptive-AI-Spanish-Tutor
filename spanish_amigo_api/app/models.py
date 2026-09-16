@@ -231,6 +231,7 @@ class PracticeAttempt(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(128), ForeignKey("users.id", ondelete="CASCADE", name="fk_practice_attempts_user"), nullable=False)
     skill_id: Mapped[str] = mapped_column(String(100), ForeignKey("skills.skill_id", ondelete="RESTRICT", name="fk_practice_attempts_skill"), nullable=False)
+    source_assessment_event_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("assessment_events.id", ondelete="RESTRICT", name="fk_practice_attempts_source_event"), nullable=True)
     assessment_event_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("assessment_events.id", ondelete="RESTRICT", name="fk_practice_attempts_assessment_event"), nullable=True)
     review_item_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("review_items.id", ondelete="SET NULL", name="fk_practice_attempts_review_item"), nullable=True)
     chat_session_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("chat_sessions.id", ondelete="SET NULL", name="fk_practice_attempts_chat_session"), nullable=True)
@@ -251,6 +252,7 @@ class PracticeAttempt(Base):
     user: Mapped["User"] = relationship(back_populates="practice_attempts")
     __table_args__ = (
         UniqueConstraint("user_id", "source_event_key", name="uq_practice_attempts_user_source_key"),
+        Index("uq_practice_attempts_source_assessment_event", "source_assessment_event_id", unique=True, postgresql_where=(source_assessment_event_id.is_not(None)), sqlite_where=(source_assessment_event_id.is_not(None))),
         CheckConstraint("outcome IN ('pending', 'correct', 'incorrect', 'partial', 'invalid', 'not_applicable')", name="ck_practice_attempts_outcome"),
         CheckConstraint("support_level IN ('independent', 'hinted', 'guided', 'exposure', 'failed')", name="ck_practice_attempts_support_level"),
         CheckConstraint("independent_recall = false OR (support_level = 'independent' AND hint_used = false)", name="ck_practice_attempts_independent_recall"),

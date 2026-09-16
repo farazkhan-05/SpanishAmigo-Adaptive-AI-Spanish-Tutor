@@ -16,6 +16,7 @@ from typing import Literal, Optional, Sequence, cast
 from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from fsrs import Card, Rating, Scheduler, State
 
@@ -51,10 +52,190 @@ class ReviewAssessmentResult:
     completed: bool
 
 
+@dataclass(frozen=True)
+class TargetedPracticeAssessmentResult:
+    attempt: PracticeAttempt
+    event: AssessmentEvent
+    state: LearnerSkillState | None
+    mastery_updated: bool
+    already_completed: bool = False
+
+
 def review_exercise_text(skill_id: str) -> str:
     """Server-owned, taxonomy-grounded recall prompt; no claim of success on display."""
     skill = skill_definition(skill_id)
     return f"Recall practice for {skill.display_label}: write one Spanish answer that demonstrates {skill.description}. Your turn."
+
+
+def _is_targeted_practice_source(event: AssessmentEvent) -> bool:
+    if event.source_type != "chat_message" or event.validation_status != "accepted":
+        return False
+    if event.skill_id is None or event.evidence_modality != "text":
+        return False
+    if event.proposed_result not in {"incorrect", "partial"}:
+        return False
+    try:
+        skill = skill_definition(event.skill_id)
+        return skill.category != "vocabulary" and mastery_eligibility(event.skill_id, event.evidence_modality)
+    except ValueError:
+        return False
+
+
+def get_targeted_practice_recommendation(db: Session, *, verified_uid: str) -> AssessmentEvent | None:
+    """Return the newest eligible chat mistake that has no practice attempt yet."""
+    events = db.scalars(select(AssessmentEvent).where(
+        AssessmentEvent.user_id == verified_uid,
+        AssessmentEvent.source_type == "chat_message",
+        AssessmentEvent.validation_status == "accepted",
+    ).order_by(AssessmentEvent.created_at.desc(), AssessmentEvent.id.desc()))
+    for event in events:
+        if not _is_targeted_practice_source(event):
+            continue
+        prior_attempt = db.scalar(select(PracticeAttempt.id).where(
+            PracticeAttempt.user_id == verified_uid,
+            PracticeAttempt.source_assessment_event_id == event.id,
+        ))
+        if prior_attempt is None:
+            return event
+    return None
+
+
+def start_targeted_practice(db: Session, *, verified_uid: str, source_event_id: str) -> PracticeAttempt:
+    """Create or return one server-owned attempt for one eligible chat event."""
+    event = db.scalar(select(AssessmentEvent).where(
+        AssessmentEvent.id == source_event_id,
+        AssessmentEvent.user_id == verified_uid,
+    ).with_for_update())
+    if event is None or not _is_targeted_practice_source(event):
+        raise ValueError("practice recommendation not found")
+    if event.skill_id is None:
+        raise ValueError("practice recommendation has no target skill")
+    skill_id = event.skill_id
+    existing = db.scalar(select(PracticeAttempt).where(
+        PracticeAttempt.user_id == verified_uid,
+        PracticeAttempt.source_assessment_event_id == event.id,
+    ).order_by(PracticeAttempt.created_at.desc()).with_for_update())
+    if existing is not None:
+        return existing
+    try:
+        attempt = create_practice_attempt(
+            db,
+            verified_uid=verified_uid,
+            skill_id=skill_id,
+            exercise_type="targeted_chat_followup",
+            source_assessment_event_id=event.id,
+            exercise_id=f"targeted:{event.id}",
+            prompt_snapshot=review_exercise_text(skill_id),
+            outcome="pending",
+            support_level="independent",
+            independent_recall=True,
+            processing_version="phase5-targeted-practice-v1",
+            source_event_key=f"targeted-practice:{event.id}",
+        )
+        db.flush()
+        return attempt
+    except IntegrityError:
+        # A concurrent start may win either the source-link or deterministic-key
+        # unique constraint. Return that committed winner as the idempotent result.
+        db.rollback()
+        existing = db.scalar(select(PracticeAttempt).where(
+            PracticeAttempt.user_id == verified_uid,
+            PracticeAttempt.source_assessment_event_id == event.id,
+        ).order_by(PracticeAttempt.created_at.desc()))
+        if existing is not None:
+            return existing
+        raise
+
+
+def assess_targeted_practice_submission(
+    db: Session, *, verified_uid: str, attempt_id: str, learner_answer: str,
+) -> TargetedPracticeAssessmentResult:
+    """Assess a new answer for a server-issued targeted attempt and apply eligible evidence once."""
+    attempt = db.scalar(select(PracticeAttempt).where(
+        PracticeAttempt.id == attempt_id,
+        PracticeAttempt.user_id == verified_uid,
+    ).with_for_update())
+    if attempt is None or attempt.source_assessment_event_id is None:
+        raise ValueError("practice attempt not found")
+    source_event = db.scalar(select(AssessmentEvent).where(
+        AssessmentEvent.id == attempt.source_assessment_event_id,
+        AssessmentEvent.user_id == verified_uid,
+    ).with_for_update())
+    if source_event is None or not _is_targeted_practice_source(source_event) or source_event.skill_id != attempt.skill_id:
+        raise ValueError("practice attempt source is no longer eligible")
+    if attempt.assessment_event_id:
+        event = db.get(AssessmentEvent, attempt.assessment_event_id)
+        if event is None:
+            raise RuntimeError("completed practice attempt has no event")
+        state = get_state_for_user(db, verified_uid, attempt.skill_id)
+        return TargetedPracticeAssessmentResult(attempt, event, state, db.scalar(
+            select(ReviewHistory.id).where(ReviewHistory.assessment_event_id == event.id)
+        ) is not None, True)
+    if attempt.outcome != "pending":
+        raise ValueError("practice attempt already completed")
+
+    gate = assessability_gate(learner_answer, prior_messages=(attempt.prompt_snapshot or "Your turn",))
+    event_key = f"targeted-practice-submit:{attempt.id}"
+    try:
+        from app.services.ai import propose_assessment
+        proposal, model_version = propose_assessment(learner_answer, db)
+        validation = validate_assessment_proposal(
+            proposal, learner_turn=learner_answer, gate=gate, evidence_modality="text"
+        )
+        if validation.status == "accepted" and (
+            validation.skill is None or validation.skill.skill_id != attempt.skill_id
+        ):
+            validation = EvidenceValidation(
+                "rejected", "targeted_practice_skill_mismatch", validation.skill,
+                validation.normalized_evidence, validation.span_start, validation.span_end,
+            )
+        event = create_assessment_event(
+            db,
+            verified_uid=verified_uid,
+            skill_id=attempt.skill_id,
+            source_type="practice_attempt",
+            evidence_snapshot=proposal.evidence,
+            normalized_evidence=validation.normalized_evidence,
+            evidence_span_start=validation.span_start,
+            evidence_span_end=validation.span_end,
+            evidence_modality="text",
+            proposed_result=proposal.result,
+            validation_status=validation.status,
+            proposal_confidence=proposal.confidence,
+            error_type=proposal.error_type,
+            severity=proposal.severity,
+            correction=proposal.correction,
+            misconception_id=proposal.misconception_id,
+            rejection_reason=validation.reason,
+            validator_version=ASSESSMENT_AUDIT_VERSION,
+            assessment_model_version=model_version,
+            source_event_key=event_key,
+        )
+    except Exception:
+        event = create_assessment_event(
+            db,
+            verified_uid=verified_uid,
+            skill_id=attempt.skill_id,
+            source_type="practice_attempt",
+            evidence_snapshot=learner_answer,
+            proposed_result="not_applicable",
+            validation_status="invalid",
+            evidence_modality="text",
+            rejection_reason="practice_assessment_provider_or_schema_failure",
+            validator_version=ASSESSMENT_AUDIT_VERSION,
+            source_event_key=event_key,
+        )
+    attempt.learner_response_snapshot = learner_answer
+    attempt.assessment_event_id = event.id
+    attempt.outcome = event.proposed_result if event.validation_status == "accepted" else "invalid"
+    if event.validation_status != "accepted":
+        db.flush()
+        return TargetedPracticeAssessmentResult(attempt, event, None, False)
+    state = process_accepted_evidence(
+        db, verified_uid=verified_uid, event_id=event.id, practice_attempt_id=attempt.id
+    )
+    db.flush()
+    return TargetedPracticeAssessmentResult(attempt, event, state, True)
 
 
 def start_due_review(db: Session, *, verified_uid: str, review_id: str, now: datetime | None = None) -> PracticeAttempt:
@@ -193,6 +374,8 @@ def process_accepted_evidence(db: Session, *, verified_uid: str, event_id: str, 
         raise ValueError("authenticated user not found")
     event = db.scalar(select(AssessmentEvent).where(AssessmentEvent.id == event_id, AssessmentEvent.user_id == verified_uid).with_for_update())
     if event is None: raise ValueError("event not found for authenticated user")
+    if event.source_type != "practice_attempt":
+        raise ValueError("chat evidence cannot mutate mastery")
     if event.validation_status != "accepted" or event.skill_id is None or not mastery_eligibility(event.skill_id, event.evidence_modality):
         raise ValueError("event is not mastery eligible")
     if event.proposed_result not in {"correct", "incorrect", "partial"}: raise ValueError("event result is not concrete")
@@ -204,7 +387,15 @@ def process_accepted_evidence(db: Session, *, verified_uid: str, event_id: str, 
         state = get_state_for_user(db, verified_uid, event.skill_id)
         if state is None: raise RuntimeError("idempotency history without state")
         return state
-    if attempt is None or attempt.support_level == "exposure": raise ValueError("eligible accepted practice attempt required")
+    if attempt is None or attempt.support_level == "exposure" or attempt.outcome not in {"correct", "incorrect", "partial"}:
+        raise ValueError("eligible accepted practice attempt required")
+    if attempt.source_assessment_event_id:
+        source_event = db.scalar(select(AssessmentEvent).where(
+            AssessmentEvent.id == attempt.source_assessment_event_id,
+            AssessmentEvent.user_id == verified_uid,
+        ).with_for_update())
+        if source_event is None or not _is_targeted_practice_source(source_event) or source_event.skill_id != event.skill_id:
+            raise ValueError("practice attempt source is not eligible")
     skill = skill_definition(event.skill_id)
     if skill.assessment_mode != "text" or skill.category == "vocabulary": raise ValueError("non-atomic skill")
     state = create_unknown_state(db, verified_uid, event.skill_id)

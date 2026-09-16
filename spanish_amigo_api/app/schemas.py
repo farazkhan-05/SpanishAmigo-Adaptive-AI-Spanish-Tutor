@@ -108,6 +108,48 @@ class ReviewStartResponse(BaseModel):
     exercise_text: str
 
 
+class TargetedPracticeRecommendation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    available: bool
+    source_event_id: Optional[str] = None
+    skill_id: Optional[str] = None
+    display_name: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class TargetedPracticeStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_event_id: str = Field(..., min_length=1, max_length=36)
+
+
+class TargetedPracticeStartResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attempt_id: str
+    source_event_id: str
+    skill_id: str
+    display_name: str
+    exercise_id: str
+    exercise_text: str
+    status: str = Field(..., pattern="^(pending|correct|incorrect|partial|invalid|not_applicable)$")
+
+
+class TargetedPracticeSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    learner_answer: str = Field(..., min_length=1, max_length=2000)
+
+
+class TargetedPracticeSubmitResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attempt_id: str
+    event_id: str
+    skill_id: str
+    status: str = Field(..., pattern="^(accepted|rejected|ambiguous|invalid|low_confidence)$")
+    result: str = Field(..., pattern="^(correct|incorrect|partial|unknown|not_applicable)$")
+    mastery_updated: bool
+    learner_status: str = Field(..., pattern="^(mastery_updated|evidence_recorded|not_accepted|already_completed)$")
+    due_at: Optional[datetime] = None
+
+
 class AssessmentProposal(BaseModel):
     """Strict, reasoning-free model proposal. Application validation is authoritative."""
 

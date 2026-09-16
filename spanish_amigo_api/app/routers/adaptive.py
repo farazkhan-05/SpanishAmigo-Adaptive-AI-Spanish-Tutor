@@ -7,8 +7,30 @@ import uuid
 from app.curriculum_metadata import SkillDefinition
 from app.database import get_db
 from app.models import ReviewHistory, ReviewItem
-from app.schemas import AdaptiveStateResponse, ReviewResponse, ReviewStartResponse, ReviewSubmission
-from app.services.adaptive import _utc, assess_review_submission, get_state_for_user, get_states_for_user, review_rationale, skill_definition, start_due_review, status_for_state
+from app.schemas import (
+    AdaptiveStateResponse,
+    ReviewResponse,
+    ReviewStartResponse,
+    ReviewSubmission,
+    TargetedPracticeRecommendation,
+    TargetedPracticeStartRequest,
+    TargetedPracticeStartResponse,
+    TargetedPracticeSubmission,
+    TargetedPracticeSubmitResponse,
+)
+from app.services.adaptive import (
+    _utc,
+    assess_review_submission,
+    assess_targeted_practice_submission,
+    get_state_for_user,
+    get_states_for_user,
+    get_targeted_practice_recommendation,
+    review_rationale,
+    skill_definition,
+    start_due_review,
+    start_targeted_practice,
+    status_for_state,
+)
 from app.services.auth import get_current_user
 from app.services.telemetry import error_category, record
 
@@ -100,3 +122,100 @@ def submit_review(review_id: str, payload: ReviewSubmission, db: Session = Depen
             # This is the validated outcome stored by the server, not a client-supplied rating.
             "result": result.event.proposed_result,
             "mastery_updated": result.event.validation_status == "accepted"}
+
+
+@router.get("/practice/recommendation", response_model=TargetedPracticeRecommendation)
+def targeted_practice_recommendation(
+    db: Session = Depends(get_db), current_user: dict = Depends(get_current_user),
+):
+    uid = current_user.get("uid")
+    if not uid:
+        raise HTTPException(status_code=401, detail="Authentication failed.")
+    event = get_targeted_practice_recommendation(db, verified_uid=uid)
+    if event is None:
+        return TargetedPracticeRecommendation(available=False)
+    if event.skill_id is None:
+        return TargetedPracticeRecommendation(available=False)
+    skill = skill_definition(event.skill_id)
+    return TargetedPracticeRecommendation(
+        available=True,
+        source_event_id=event.id,
+        skill_id=skill.skill_id,
+        display_name=skill.display_label,
+        reason="A validated chat response needs one more independent practice response.",
+    )
+
+
+@router.post("/practice/start", response_model=TargetedPracticeStartResponse)
+def start_targeted_practice_route(
+    payload: TargetedPracticeStartRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    uid = current_user.get("uid")
+    if not uid:
+        raise HTTPException(status_code=401, detail="Authentication failed.")
+    try:
+        attempt = start_targeted_practice(
+            db, verified_uid=uid, source_event_id=payload.source_event_id
+        )
+        db.commit()
+    except Exception as error:
+        db.rollback()
+        record(operation_id=str(uuid.uuid4()), operation="adaptive_update", success=False,
+               adaptive_update_failure="targeted_practice_start_failed", error_category=error_category(error))
+        raise HTTPException(status_code=404 if "not found" in str(error) else 409, detail=str(error))
+    skill = skill_definition(attempt.skill_id)
+    return TargetedPracticeStartResponse(
+        attempt_id=attempt.id,
+        source_event_id=attempt.source_assessment_event_id or payload.source_event_id,
+        skill_id=skill.skill_id,
+        display_name=skill.display_label,
+        exercise_id=attempt.exercise_id or attempt.id,
+        exercise_text=attempt.prompt_snapshot or "",
+        status=attempt.outcome,
+    )
+
+
+@router.post("/practice/{attempt_id}/submit", response_model=TargetedPracticeSubmitResponse)
+def submit_targeted_practice(
+    attempt_id: str,
+    payload: TargetedPracticeSubmission,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    uid = current_user.get("uid")
+    if not uid:
+        raise HTTPException(status_code=401, detail="Authentication failed.")
+    try:
+        result = assess_targeted_practice_submission(
+            db, verified_uid=uid, attempt_id=attempt_id, learner_answer=payload.learner_answer
+        )
+        due_at = None
+        if result.mastery_updated:
+            item = db.scalar(select(ReviewItem).where(
+                ReviewItem.user_id == uid, ReviewItem.skill_id == result.attempt.skill_id
+            ))
+            due_at = item.due_at if item else None
+        db.commit()
+    except Exception as error:
+        db.rollback()
+        record(operation_id=str(uuid.uuid4()), operation="adaptive_update", success=False,
+               adaptive_update_failure="targeted_practice_submission_failed", error_category=error_category(error))
+        raise HTTPException(status_code=404 if "not found" in str(error) else 409, detail=str(error))
+    skill = skill_definition(result.attempt.skill_id)
+    learner_status = (
+        "already_completed" if result.already_completed else
+        "mastery_updated" if result.mastery_updated else
+        "evidence_recorded"
+    )
+    return TargetedPracticeSubmitResponse(
+        attempt_id=result.attempt.id,
+        event_id=result.event.id,
+        skill_id=skill.skill_id,
+        status=result.event.validation_status,
+        result=result.event.proposed_result,
+        mastery_updated=result.mastery_updated,
+        learner_status=learner_status,
+        due_at=due_at,
+    )

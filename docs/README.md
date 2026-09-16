@@ -18,6 +18,7 @@ The following documents are retained as auditable engineering records. They desc
 - [Phase 3: Curriculum and retrieval foundation](ADAPTIVE_V2_PHASE3.md): Taxonomy definition, slide-to-skill mappings, and embedding backfill design.
 - [Phase 4: Tenant-safe evidence storage](ADAPTIVE_V2_PHASE4.md): Database persistence schema for learner state, assessment events, and practice attempts.
 - [Phase 5: Validated assessment and turn planning](ADAPTIVE_V2_PHASE5.md): Shared turn planner, assessability gate, deterministic validation, and LangGraph topology.
+- [Phase 5 targeted practice lifecycle](ADAPTIVE_V2_PHASE5_TARGETED_PRACTICE.md): Confirmed chat-to-practice gap, server-owned targeted practice, and the second-response mastery boundary.
 - [Phase 6: Mastery, practice, and FSRS review](ADAPTIVE_V2_PHASE6.md): Deterministic mastery mutation, review endpoints, and FSRS scheduling integration.
 - [Phase 7: Rigorous offline evaluation](ADAPTIVE_V2_PHASE7.md): Deterministic evaluation harness, golden test cases, and safety invariant verification.
 - [Phase 8: Learner-facing adaptive UX](ADAPTIVE_V2_PHASE8.md): Frontend My Spanish dashboard and spaced review workflow.

@@ -30,3 +30,25 @@ export const submitReview = (user, reviewId, attemptId, learnerAnswer) => adapti
   { method: 'POST', body: { attempt_id: attemptId, learner_answer: learnerAnswer } },
   'Unable to submit this review.'
 );
+
+export const getTargetedPracticeRecommendation = (user, sessionId) => adaptiveRequest(
+  user,
+  `/adaptive/practice/recommendation${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''}`,
+  { method: 'GET' },
+  'Unable to check for a practice activity.'
+);
+
+// The server owns the source event, skill, exercise, and answer assessment.
+export const startTargetedPractice = (user, sourceEventId) => adaptiveRequest(
+  user,
+  '/adaptive/practice/start',
+  { method: 'POST', body: { source_event_id: sourceEventId } },
+  'Unable to start this practice activity.'
+);
+
+export const submitTargetedPractice = (user, attemptId, learnerAnswer) => adaptiveRequest(
+  user,
+  `/adaptive/practice/${encodeURIComponent(attemptId)}/submit`,
+  { method: 'POST', body: { learner_answer: learnerAnswer } },
+  'Unable to submit this practice activity.'
+);

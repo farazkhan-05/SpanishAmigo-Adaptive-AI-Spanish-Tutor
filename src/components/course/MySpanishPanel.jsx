@@ -337,6 +337,12 @@ const MySpanishPanel = () => {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const handleAdaptiveUpdate = () => refresh();
+    window.addEventListener('spanish-amigo:adaptive-updated', handleAdaptiveUpdate);
+    return () => window.removeEventListener('spanish-amigo:adaptive-updated', handleAdaptiveUpdate);
+  }, [refresh]);
+
   const handleManualRefresh = async () => {
     if (refreshing || loading) return;
     setRefreshing(true);

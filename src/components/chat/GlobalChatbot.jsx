@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Box, IconButton, TextField, Typography, Paper, CircularProgress, Fade } from '@mui/material';
+import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, TextField, Typography, Paper, CircularProgress, Fade } from '@mui/material';
 import { Bot, X, Send, User, Mic, Volume2, VolumeX, Menu, Plus, Trash2, Edit3, Check } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useAuth } from '../../context/AuthContext';
 import { authFetch } from '../../api/authFetch';
 import { normalizeApiError, throwApiError } from '../../api/apiError';
+import { getTargetedPracticeRecommendation, startTargetedPractice, submitTargetedPractice } from '../../api/adaptive';
 
 const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -13,6 +14,13 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [recommendation, setRecommendation] = useState(null);
+  const [practiceAttempt, setPracticeAttempt] = useState(null);
+  const [practiceAnswer, setPracticeAnswer] = useState('');
+  const [practiceResult, setPracticeResult] = useState(null);
+  const [practiceError, setPracticeError] = useState('');
+  const [practiceLoading, setPracticeLoading] = useState(false);
+  const [practiceSubmitting, setPracticeSubmitting] = useState(false);
 
   // Multi-session State
   const [sessions, setSessions] = useState([]);
@@ -184,6 +192,10 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
     setSessions([]);
     bindActiveSessionId(null);
     setMessages([]);
+    setRecommendation(null);
+    setPracticeAttempt(null);
+    setPracticeResult(null);
+    setPracticeError('');
     setIsLoading(false);
     setIsHistoryLoading(false);
     setIsDrawerOpen(false);
@@ -294,6 +306,8 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
     if (!inputText.trim() || isLoading || isSendingRef.current) return;
 
     const userMessage = inputText.trim();
+    setRecommendation(null);
+    setPracticeError('');
     isSendingRef.current = true;
     setIsLoading(true);
     setInputText('');
@@ -456,12 +470,56 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
       }
       // Intentionally do not auto-speak on reply.
       // Speech should only play when user taps the sound icon on a message.
+      if (activeSessionIdRef.current && !isAnonymous) {
+        try {
+          const nextRecommendation = await getTargetedPracticeRecommendation(user, activeSessionIdRef.current);
+          setRecommendation(nextRecommendation.available ? nextRecommendation : null);
+        } catch (recommendationError) {
+          console.error("Targeted practice recommendation error:", recommendationError);
+          setRecommendation(null);
+          setPracticeError('We could not check for a follow-up practice activity.');
+        }
+      }
     } catch (error) {
       console.error("Chat sending error:", error);
       setMessages(prev => [...prev, { role: 'model', text: "Lo siento, I am having trouble reaching my server right now. 🔌" }]);
     } finally {
       isSendingRef.current = false;
       setIsLoading(false);
+    }
+  };
+
+  const handleStartPractice = async () => {
+    if (!recommendation || practiceLoading) return;
+    setPracticeLoading(true);
+    setPracticeError('');
+    try {
+      const started = await startTargetedPractice(user, recommendation.source_event_id);
+      setPracticeAttempt(started);
+      setPracticeAnswer('');
+      setPracticeResult(null);
+      setRecommendation(null);
+    } catch (error) {
+      setPracticeError(error.message || 'This practice activity is no longer available.');
+    } finally {
+      setPracticeLoading(false);
+    }
+  };
+
+  const handleSubmitPractice = async (answer) => {
+    if (!practiceAttempt || practiceSubmitting) return;
+    setPracticeSubmitting(true);
+    setPracticeError('');
+    try {
+      const result = await submitTargetedPractice(user, practiceAttempt.attempt_id, answer);
+      setPracticeResult(result);
+      if (result.mastery_updated) {
+        window.dispatchEvent(new CustomEvent('spanish-amigo:adaptive-updated'));
+      }
+    } catch (error) {
+      setPracticeError(error.message || 'We could not record that answer. Please try again.');
+    } finally {
+      setPracticeSubmitting(false);
     }
   };
 
@@ -798,6 +856,26 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
                           <Box sx={{ whiteSpace: 'pre-wrap' }}>{msg.text}</Box>
                         )}
                       </Box>
+                      {msg.role === 'model' && idx === messages.length - 1 && recommendation && (
+                        <Box sx={{ maxWidth: '82%', alignSelf: 'flex-start', mt: -0.5 }}>
+                          <Typography sx={{ fontSize: '0.72rem', color: 'text.secondary', fontWeight: 800, mb: 0.5 }}>
+                            {recommendation.display_name}
+                          </Typography>
+                          <Button
+                            variant="contained"
+                            size="small"
+                            onClick={handleStartPractice}
+                            disabled={practiceLoading}
+                            startIcon={practiceLoading ? <CircularProgress size={13} color="inherit" /> : <Sparkles size={14} />}
+                            sx={{ background: '#6C63FF', color: '#fff', fontWeight: 900, border: '2px solid #1A1A1A', boxShadow: '2px 2px 0 #1A1A1A' }}
+                          >
+                            {practiceLoading ? 'Preparing…' : 'Practice this skill'}
+                          </Button>
+                          <Typography sx={{ mt: 0.6, fontSize: '0.72rem', color: 'text.secondary', lineHeight: 1.35 }}>
+                            {recommendation.reason}
+                          </Typography>
+                        </Box>
+                      )}
                       {msg.role === 'user' && (
                         <Box sx={{ width: 28, height: 28, borderRadius: '8px', background: darkMode ? '#3A3A5C' : '#FFE66D', border: `2px solid ${darkMode ? '#555' : '#1A1A1A'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1A1A1A', flexShrink: 0 }}>
                           <User size={14} />
@@ -819,6 +897,12 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
                 </>
               )}
             </Box>
+
+            {practiceError && !practiceAttempt && (
+              <Alert severity="info" onClose={() => setPracticeError('')} sx={{ mx: 1.5, mb: 1, borderRadius: '10px' }}>
+                {practiceError}
+              </Alert>
+            )}
 
             {/* Input Area */}
             <Box component="form" onSubmit={handleSend} sx={{ p: 1.5, background: darkMode ? '#252542' : '#FFE66D', borderTop: `3px solid ${darkMode ? '#555' : '#1A1A1A'}`, display: 'flex', gap: 1, alignItems: 'center' }}>
@@ -883,6 +967,66 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
           </Box>
         </Paper>
       </Fade>
+      <Dialog
+        open={Boolean(practiceAttempt)}
+        onClose={practiceSubmitting ? undefined : () => { setPracticeAttempt(null); setPracticeResult(null); setPracticeError(''); }}
+        fullWidth
+        maxWidth="sm"
+        aria-labelledby="targeted-practice-title"
+      >
+        <DialogTitle id="targeted-practice-title" sx={{ fontWeight: 900 }}>
+          Practice: {practiceAttempt?.display_name}
+        </DialogTitle>
+        <DialogContent>
+          <Typography sx={{ fontWeight: 900, whiteSpace: 'pre-wrap', lineHeight: 1.5, mb: 2 }}>
+            {practiceAttempt?.exercise_text}
+          </Typography>
+          <TextField
+            fullWidth
+            multiline
+            minRows={3}
+            label="Your answer"
+            placeholder="Write your answer in Spanish"
+            disabled={practiceSubmitting || Boolean(practiceResult)}
+            value={practiceAnswer}
+            onChange={(event) => setPracticeAnswer(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && practiceAnswer.trim()) {
+                event.preventDefault();
+                handleSubmitPractice(practiceAnswer.trim());
+              }
+            }}
+            inputProps={{ maxLength: 2000 }}
+            helperText="Your answer is assessed by Lumi and recorded only if it passes the learning checks."
+          />
+          {practiceError && <Alert severity="error" sx={{ mt: 2, borderRadius: '10px' }}>{practiceError}</Alert>}
+          {practiceResult && (
+            <Alert severity={practiceResult.status === 'accepted' ? 'success' : 'info'} sx={{ mt: 2, borderRadius: '10px' }}>
+              {practiceResult.status === 'accepted'
+                ? practiceResult.result === 'correct'
+                  ? 'Correct — your practice was recorded and your skill profile was updated.'
+                  : 'Your answer needs more practice, and the result was recorded.'
+                : 'Your answer was not accepted for a learning update, so your skill profile was not changed.'}
+              {practiceResult.due_at && ` Next review: ${new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(practiceResult.due_at))}.`}
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ p: 2.5, pt: 1 }}>
+          <Button onClick={() => { setPracticeAttempt(null); setPracticeResult(null); setPracticeError(''); }} disabled={practiceSubmitting}>
+            {practiceResult ? 'Close' : 'Cancel'}
+          </Button>
+          {!practiceResult && (
+            <Button
+              variant="contained"
+              disabled={practiceSubmitting}
+              onClick={() => practiceAnswer.trim() && handleSubmitPractice(practiceAnswer.trim())}
+              sx={{ background: '#FF6B6B', color: '#fff' }}
+            >
+              {practiceSubmitting ? 'Checking…' : 'Submit answer'}
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
     </>
   );
 };

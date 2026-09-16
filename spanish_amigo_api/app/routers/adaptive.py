@@ -126,12 +126,13 @@ def submit_review(review_id: str, payload: ReviewSubmission, db: Session = Depen
 
 @router.get("/practice/recommendation", response_model=TargetedPracticeRecommendation)
 def targeted_practice_recommendation(
+    session_id: int | None = Query(None),
     db: Session = Depends(get_db), current_user: dict = Depends(get_current_user),
 ):
     uid = current_user.get("uid")
     if not uid:
         raise HTTPException(status_code=401, detail="Authentication failed.")
-    event = get_targeted_practice_recommendation(db, verified_uid=uid)
+    event = get_targeted_practice_recommendation(db, verified_uid=uid, chat_session_id=session_id)
     if event is None:
         return TargetedPracticeRecommendation(available=False)
     if event.skill_id is None:

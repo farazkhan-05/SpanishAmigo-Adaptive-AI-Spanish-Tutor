@@ -81,23 +81,28 @@ def _is_targeted_practice_source(event: AssessmentEvent) -> bool:
         return False
 
 
-def get_targeted_practice_recommendation(db: Session, *, verified_uid: str) -> AssessmentEvent | None:
-    """Return the newest eligible chat mistake that has no practice attempt yet."""
-    events = db.scalars(select(AssessmentEvent).where(
+def get_targeted_practice_recommendation(
+    db: Session, *, verified_uid: str, chat_session_id: int | None = None,
+) -> AssessmentEvent | None:
+    """Return only the current session's newest accepted chat assessment, if eligible."""
+    filters = [
         AssessmentEvent.user_id == verified_uid,
         AssessmentEvent.source_type == "chat_message",
         AssessmentEvent.validation_status == "accepted",
+    ]
+    if chat_session_id is not None:
+        filters.append(AssessmentEvent.chat_session_id == chat_session_id)
+    events = db.scalars(select(AssessmentEvent).where(
+        *filters,
     ).order_by(AssessmentEvent.created_at.desc(), AssessmentEvent.id.desc()))
-    for event in events:
-        if not _is_targeted_practice_source(event):
-            continue
-        prior_attempt = db.scalar(select(PracticeAttempt.id).where(
-            PracticeAttempt.user_id == verified_uid,
-            PracticeAttempt.source_assessment_event_id == event.id,
-        ))
-        if prior_attempt is None:
-            return event
-    return None
+    event = next(iter(events), None)
+    if event is None or not _is_targeted_practice_source(event):
+        return None
+    prior_attempt = db.scalar(select(PracticeAttempt.id).where(
+        PracticeAttempt.user_id == verified_uid,
+        PracticeAttempt.source_assessment_event_id == event.id,
+    ))
+    return event if prior_attempt is None else None
 
 
 def start_targeted_practice(db: Session, *, verified_uid: str, source_event_id: str) -> PracticeAttempt:

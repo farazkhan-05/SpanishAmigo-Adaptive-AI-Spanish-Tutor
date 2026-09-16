@@ -83,7 +83,7 @@ Operational notes:
 - `AUTH_ALLOW_INSECURE_DEV_TOKENS=false` must remain enforced in production.
 - `ALLOWED_CORS_ORIGINS` is a comma-separated list of allowed origins.
 - `ADAPTIVE_V2_PLANNER_ENABLED` defaults to `false` in code; the deployed Adaptive V2 production baseline was verified with the environment value `true`.
-- Release candidate migrations `d2e3f4a5b6c7` (telemetry events) and `e1782f3a4b5c` (targeted practice linkage) remain pending deployment to production.
+- The production database is at Alembic revision `e1782f3a4b5c` (including telemetry events in `d2e3f4a5b6c7` and targeted practice linkages in `e1782f3a4b5c`).
 - `TELEMETRY_ENABLED` controls telemetry logging, `TELEMETRY_SAMPLE_RATE` (0.0 to 1.0) samples successful events while preserving all failures, and `TELEMETRY_RETENTION_DAYS` specifies the pruning horizon.
 
 ## Local development

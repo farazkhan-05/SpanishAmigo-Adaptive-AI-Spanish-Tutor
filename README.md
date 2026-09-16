@@ -9,7 +9,7 @@ Live application:
 * Backend API: [https://spanish-amigo-api.vercel.app](https://spanish-amigo-api.vercel.app)
 * Health endpoint: [https://spanish-amigo-api.vercel.app/health](https://spanish-amigo-api.vercel.app/health)
 
-Production deployment status: The live URLs above run the verified production baseline (`c6d7e8f9a0b1`). Changes in the `feature/final-engineering-upgrade` release candidate (including model upgrade to `gemini-3.5-flash-lite`, telemetry, and targeted practice linkages in migrations `d2e3f4a5b6c7` and `e1782f3a4b5c`) represent release-candidate code pending deployment.
+Production deployment status: The live URLs above now run the final engineering release from `main`, with the production database at Alembic revision `e1782f3a4b5c`. This release includes the model upgrade to `gemini-3.5-flash-lite`, AI telemetry from migration `d2e3f4a5b6c7`, and targeted practice linkages from migration `e1782f3a4b5c`.
 
 ## Architecture
 
@@ -63,7 +63,7 @@ The application provides a structured progression for beginner Spanish students:
 * **Course map**: Visual navigation path tracking lesson unlocking, progress metrics, completion status, and achievement badges.
 * **Interactive lesson player**: Modular slide flow providing context cards, translation reveals with unmetered AI explanations, and practice quiz slides with immediate feedback and hints.
 * **Lumi AI conversational tutor**: Conversational tutor available globally across the application and within individual lessons.
-  * **Model configuration**: Release-candidate primary model is `gemini-3.5-flash-lite`, with automatic fallback to `gemma-4-31b-it` upon quota exhaustion.
+  * **Model configuration**: The production primary model is `gemini-3.5-flash-lite`, with automatic fallback to `gemma-4-31b-it` upon quota exhaustion.
   * **Conversational style**: Lumi produces concise, proportional responses matched to the learner's turn length. Casual greetings and small talk receive natural replies without turning into service interactions ("How can I help you?").
   * **Pedagogical boundaries**: Lumi answers specific questions directly without unsolicited mini-lessons, lectures, or unrequested grammar drills.
   * **Clean formatting**: Responses avoid decorative emojis, excessive bolding, and mechanical bracket translations (`palabra [word]`). Translations are woven naturally into prose.
@@ -145,7 +145,7 @@ To prevent invalid state updates, `process_accepted_evidence` and the determinis
 
 * **FSRS scheduling**: Validated review submissions feed into the Free Spaced Repetition Scheduler (`py-fsrs` 6.3.2), which computes card stability, difficulty, and next due review timestamps upon completing server-issued exercises.
 * **Review queue**: Due reviews are surfaced through dedicated endpoints (`/adaptive/reviews/due` and `/adaptive/reviews/next`), issuing taxonomy-grounded recall prompts (`/adaptive/reviews/{id}/start`) and evaluating submissions (`/adaptive/reviews/{id}/submit`).
-* **Targeted practice lifecycle**: When a learner makes an assessable mistake in chat, the server may issue an optional targeted practice recommendation (`/adaptive/practice/recommendation`), start the exercise (`/adaptive/practice/start`), and evaluate the submission (`/adaptive/practice/submit`).
+* **Targeted practice lifecycle**: When a learner makes an assessable mistake in chat, the server may issue an optional targeted practice recommendation (`/adaptive/practice/recommendation`), start the exercise (`/adaptive/practice/start`), and evaluate the submission (`/adaptive/practice/{attempt_id}/submit`).
 * **My Spanish panel**: A dedicated dashboard organizing the 14 curriculum skills into actionable categories:
   * *Needs practice*: Assessed skills with low mastery estimates or overdue spaced repetition reviews.
   * *Going well*: Assessed skills with high stability and demonstrated recall.
@@ -209,7 +209,7 @@ The backend includes a lightweight, privacy-safe AI telemetry service for operat
 
 ## Database schema and migrations
 
-The database schema is managed through Alembic. The release-candidate repository head is `e1782f3a4b5c`; the previously deployed production head is `c6d7e8f9a0b1`.
+The database schema is managed through Alembic. The repository and production database are both at Alembic revision `e1782f3a4b5c`.
 
 ```text
 users
@@ -238,9 +238,9 @@ system_status (key-value application status, fallback tracking, and anonymous qu
 3. `f1a2c3d4e5f6`: Ensure `lesson_slides` and `system_status` tables exist.
 4. `a3b4c5d6e7f8`: Adaptive curriculum metadata (`skills`, `lesson_slide_skills`, pgvector embeddings, full-text search).
 5. `b4c5d6e7f8a9`: Adaptive learner evidence storage (`learner_skill_states`, `assessment_events`, `practice_attempts`).
-6. `c6d7e8f9a0b1`: Adaptive mastery mutation and FSRS review scheduling (`review_items`, `review_history`) - **previously verified deployed production head**.
-7. `d2e3f4a5b6c7`: Privacy-safe AI telemetry events (`ai_telemetry_events`) - **release-candidate migration (pending production deployment)**.
-8. `e1782f3a4b5c`: Targeted practice linkage (`source_assessment_event_id` foreign key and unique index on `practice_attempts`) - **release-candidate repository head (pending production deployment)**.
+6. `c6d7e8f9a0b1`: Adaptive mastery mutation and FSRS review scheduling (`review_items`, `review_history`).
+7. `d2e3f4a5b6c7`: Privacy-safe AI telemetry events (`ai_telemetry_events`).
+8. `e1782f3a4b5c`: Targeted practice linkage (`source_assessment_event_id` foreign key and unique index on `practice_attempts`) — **current repository and production head**.
 
 ### Table descriptions
 
@@ -446,14 +446,14 @@ curl http://127.0.0.1:8000/health
 
 ### Production deployment sequence
 
-When deploying release-candidate changes to production:
+For releases that include database migrations:
 
-1. Deploy the backend API to the hosting platform.
-2. Execute database schema migrations (`uv run --locked alembic upgrade head`) to apply migrations `d2e3f4a5b6c7` and `e1782f3a4b5c`.
-3. Run the curriculum seeding script (`uv run --locked python seed_embeddings.py`) to verify skills and slide embeddings.
-4. Verify backend connectivity via the `/health` endpoint.
-5. Set `ADAPTIVE_V2_PLANNER_ENABLED=true`, `TELEMETRY_ENABLED=true`, `TELEMETRY_SAMPLE_RATE=1.0`, and `TELEMETRY_RETENTION_DAYS=30` in the production environment.
-6. Verify adaptive endpoints (`/adaptive/state`, `/adaptive/reviews/due`, `/adaptive/practice/recommendation`).
+1. Verify the production environment configuration and required secrets.
+2. Apply backward-compatible Alembic migrations (`uv run --locked alembic upgrade head`) before deploying application code that depends on the new schema.
+3. Merge and push the tested release to `main`.
+4. Allow the configured Vercel production deployments to complete.
+5. Verify the backend `/health` endpoint, database connectivity, and expected primary model.
+6. Run targeted production smoke tests for Lumi, adaptive practice, review scheduling, and telemetry.
 
 ## Authentication and security
 

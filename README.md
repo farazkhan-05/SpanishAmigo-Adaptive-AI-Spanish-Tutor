@@ -1,190 +1,287 @@
-# SpanishAmigo: Production RAG Application with Real-Time AI Chat
+# SpanishAmigo
 
-SpanishAmigo is the product implementation of this system: a full-stack Spanish learning app with structured lessons, saved progress, and an AI tutor named Lumi. The frontend is built with React and Vite. The backend is a FastAPI service that verifies Firebase ID tokens, stores user progress and chat history in Postgres, and streams AI tutor responses over Server-Sent Events.
+SpanishAmigo is a full-stack Spanish language learning web application that combines structured beginner lessons with an AI tutor named Lumi, real-time conversational practice, semantic curriculum retrieval, and deterministic adaptive skill tracking.
 
-**Live Demo:** [spanishamigo.vercel.app](https://spanishamigo.vercel.app/)
+The frontend is built with React, Vite, Material UI, and Tailwind CSS. The backend is a FastAPI service that verifies Firebase authentication tokens, persists learner progress and chat history in PostgreSQL, orchestrates Google Gemini models through LangGraph, and schedules spaced repetition reviews using the Free Spaced Repetition Scheduler (FSRS) algorithm.
 
-The project is designed as a practical production-style portfolio app: small enough to understand, but complete enough to show real work across frontend, backend, authentication, persistence, AI integration, deployment, and operational hardening.
-
-## Contents
-
-- [Product Overview](#product-overview)
-- [Features](#features)
-- [Architecture](#architecture)
-- [Tech Stack](#tech-stack)
-- [Repository Layout](#repository-layout)
-- [Local Development](#local-development)
-- [Environment Variables](#environment-variables)
-- [Database And Migrations](#database-and-migrations)
-- [Optional Lesson Retrieval Seeding](#optional-lesson-retrieval-seeding)
-- [Quality Checks](#quality-checks)
-- [Deployment](#deployment)
-- [Security And Reliability Notes](#security-and-reliability-notes)
-- [Current Status](#current-status)
-
-## Product Overview
-
-SpanishAmigo focuses on beginner Spanish practice. Learners work through short lessons, complete quiz-style interactions, and ask Lumi for help without leaving the lesson flow.
-
-The app supports both guest and signed-in usage:
-
-- Guest users are signed in anonymously through Firebase so the app can maintain a stable user identity.
-- Google sign-in unlocks saved progress beyond the guest experience.
-- Signed-in users can keep lesson progress and chat sessions tied to their Firebase account.
-
-## Features
-
-- Five structured Spanish lessons with context, translation reveal, and practice slides.
-- Course map with lesson locking, progress stats, completion states, and achievement badges.
-- Lesson player with slide transitions, answer feedback, hints, and completion handling.
-- Firebase Authentication with anonymous sign-in and Google account upgrade.
-- Local guest progress backed by `localStorage`.
-- Signed-in progress sync through FastAPI and Postgres.
-- Floating AI tutor with streamed responses over SSE.
-- Multi-session chat history with create, load, rename, and delete support.
-- Browser speech recognition for voice input.
-- Browser speech synthesis for tutor responses.
-- AI-generated explanations for translation reveal cards.
-- Light and dark mode support.
-- Backend guardrails to keep Lumi focused on Spanish learning.
-- Optional semantic lesson retrieval with Gemini embeddings and `pgvector`.
+Live application:
+* Frontend: [https://spanishamigo.vercel.app](https://spanishamigo.vercel.app)
+* Backend API: [https://spanish-amigo-api.vercel.app](https://spanish-amigo-api.vercel.app)
+* Health endpoint: [https://spanish-amigo-api.vercel.app/health](https://spanish-amigo-api.vercel.app/health)
 
 ## Architecture
 
-```text
-React/Vite frontend
-        |
-        | Firebase ID token
-        v
-FastAPI backend
-        |
-        | SQLAlchemy
-        v
-Postgres / pgvector
-        |
-        | lesson context, chat memory
-        v
-Gemini + LangGraph tutor workflow
+SpanishAmigo separates student interactions into two operational layers: an interactive curriculum interface and an asynchronous AI tutoring and evaluation pipeline.
+
+```mermaid
+flowchart TD
+    Client["React / Vite Frontend (Vercel)"]
+    Auth["Firebase Authentication"]
+    API["FastAPI Backend (Vercel)"]
+    DB[("Neon PostgreSQL 18 + pgvector")]
+    Orch["LangGraph Tutor Engine"]
+    LLM["Google Gemini (gemini-3.1-flash-lite)"]
+    Embed["Google Gemini Embeddings (gemini-embedding-2)"]
+    Validator["Deterministic Assessment Validator"]
+    FSRS["FSRS Spaced Repetition Engine"]
+
+    Client -->|"ID Token"| Auth
+    Client -->|"REST / SSE Streaming"| API
+    API -->|"Token Verification"| Auth
+    API -->|"State & Session Storage"| DB
+    API -->|"Chat & Turn Orchestration"| Orch
+    Orch -->|"Slide Embeddings / Search"| DB
+    Orch -->|"Contextual Chat / Assessment Proposals"| LLM
+    Embed -->|"768-dim Vectors"| DB
+    LLM -->|"Structured Proposals"| Validator
+    Validator -->|"Validated Evidence Events"| DB
+    Validator -->|"State Mutation & Scheduling"| FSRS
+    FSRS -->|"Due Reviews & Mastery Estimates"| DB
+    DB -->|"Adaptive Skill Metrics"| API
+    API -->|"My Spanish Dashboard"| Client
 ```
 
+The system components interact as follows:
+
+1. **Frontend interface**: The client renders lesson progression, exercise interactions, audio playback, voice capture, and a persistent chat interface for Lumi.
+2. **Authentication**: Firebase Authentication manages anonymous guest sessions and Google account linking. ID tokens are passed in HTTP request authorization headers.
+3. **Backend API**: FastAPI validates request payloads with Pydantic, verifies user identity against Firebase Admin SDK, and routes requests to database services or the LangGraph AI engine.
+4. **Retrieval and vector search**: PostgreSQL with the `pgvector` extension stores 768-dimensional embeddings of all curriculum lesson slides. Queries retrieve relevant lesson content to ground tutor responses in taught material.
+5. **Adaptive skill evaluation**: When a learner interacts with Lumi or completes exercises, Gemini proposes structured assessment events. A deterministic validator enforces pedagogical rules before persisting accepted evidence and updating FSRS review schedules.
+
+## Learner experience
+
+The application provides a structured progression for beginner Spanish students:
+
+* **Five core lessons**: Structured modules covering foundational Spanish (greetings, survival expressions, politeness, directions, and café ordering).
+* **Course map**: Visual navigation path tracking lesson unlocking, progress metrics, completion status, and achievement badges.
+* **Interactive lesson player**: Modular slide flow providing context cards, translation reveals with instant AI explanations, and practice quiz slides with immediate feedback and hints.
+* **Lumi AI tutor**: Floating conversational tutor available globally across the application and within individual lessons.
+* **Real-time streaming chat**: Tutor responses stream incrementally via Server-Sent Events (SSE) with error recovery fallbacks.
+* **Voice input and speech output**: Web Speech API integration for microphone input and spoken tutor pronunciation.
+* **Session management**: Multi-session chat history allowing learners to create, switch, rename, and delete conversation threads.
+* **Authentication flexibility**: Immediate guest access with local storage backup, with seamless upgrade to Google sign-in to persist cross-device progress.
+* **Visual customization**: Full support for light and dark themes, toggled manually or requested conversationally through Lumi.
+
+## Adaptive learning system
+
+SpanishAmigo implements an adaptive tracking architecture (Adaptive V2) that separates course completion from skill mastery. Completing slides advances course navigation, while skill mastery requires verified recall over time.
+
+### Core curriculum taxonomy
+
+The curriculum defines 14 stable educational skills across five categories:
+
+* **Pronunciation**: `pronunciation.silent-h` (speech required).
+* **Communication**: `communication.greetings`, `communication.formal-informal-address`, `communication.introductions-farewells`, `communication.politeness`, `communication.asking-directions`, `communication.cafe-ordering` (contextual).
+* **Grammar**: `grammar.gender-agreement`, `grammar.present-tense-querer`, `grammar.present-tense-tener`.
+* **Vocabulary**: `vocabulary.survival-needs`, `vocabulary.dining-basics`, `vocabulary.places-directions`, `vocabulary.cafe-items`.
+
+Across the 5 lessons, 231 lesson slides are mapped to these skills through 382 explicit associations, with 9 slides left intentionally unmapped where content does not test an atomic skill.
+
+### The validation boundary
+
+A foundational architectural rule governs skill mastery: **the language model may propose an assessment, but application code decides whether that proposal is valid evidence.**
+
+```text
+Learner Message / Exercise Response
+         |
+         v
+Gemini Assessment Proposal (gemini-3.1-flash-lite)
+[proposed_result, error_type, proposal_confidence, evidence_span]
+         |
+         v
+Deterministic Application Validator
+  - Assessability gating (filters questions, chatter, and requests)
+  - Modality rules (requires audio evidence for pronunciation)
+  - Contextual constraints (prevents scenario tags from claiming atomic mastery)
+  - Confidence threshold verification (minimum 0.80 confidence)
+  - Vocabulary bounds checks (guards against broad vocabulary hallucinations)
+         |
+  +------+------+
+  |             |
+[Accepted]  [Rejected / Invalid / Low Confidence]
+  |             |
+  v             v
+Persisted to   Logged in assessment_events without
+learner state  modifying mastery or FSRS schedules
+```
+
+### Safety and validation examples
+
+1. **Grounded grammar demonstration**:
+   * Input: *"Yo quiero un café, por favor."*
+   * Result: Validated and accepted as positive evidence for `grammar.present-tense-querer`.
+2. **Grounded grammar mistake**:
+   * Input: *"Yo tener dos hermanos."*
+   * Result: Validated and accepted as incorrect evidence for `grammar.present-tense-tener`, updating review urgency.
+3. **Information request**:
+   * Input: *"Why do we say buenos días instead of buenas días?"*
+   * Result: Identified as a question by the assessability gate. It is answered by Lumi but discarded from mastery calculations.
+4. **Modality gating**:
+   * Input: Learner types text explaining that the letter H is silent.
+   * Result: Rejected for `pronunciation.silent-h` because pronunciation skills strictly require speech audio evidence.
+
+### Spaced repetition and "My Spanish"
+
+* **FSRS scheduling**: Validated evidence feeds into the Free Spaced Repetition Scheduler (`py-fsrs` 6.3.2), which computes card stability, difficulty, and target review dates.
+* **Review queue**: Due reviews are surfaced through dedicated endpoints (`/adaptive/reviews/due` and `/adaptive/reviews/next`), providing server-generated recall prompts.
+* **My Spanish panel**: A dedicated dashboard organizing the 14 curriculum skills into actionable categories:
+  * *Needs practice*: Skills with low mastery estimates or overdue spaced repetition reviews.
+  * *Going well*: Skills with high stability and demonstrated recall.
+  * *Not assessed*: Skills where the learner has not yet produced sufficient validated evidence.
+
+## Retrieval-augmented generation (RAG)
+
+Lumi uses contextual curriculum grounding to ensure responses remain aligned with the student's current learning stage.
+
+1. **Embedding generation**: Lesson slides are vectorized using `gemini-embedding-2`, configured to 768 output dimensions.
+2. **Vector search**: Slides are stored in PostgreSQL using the `pgvector` extension. Cosine distance queries retrieve the top 3 most relevant slides matching the learner's query or current lesson context (distance threshold < 0.65).
+3. **Hybrid retrieval capability**: The repository implements reciprocal rank fusion (RRF, k=60) combining `pgvector` semantic similarity with PostgreSQL full-text search (`tsvector`, `websearch_to_tsquery`, and `ts_rank_cd`).
+4. **Prompt orchestration**: Retrieved slide excerpts, conversation history, and learner skill contexts are injected into a LangGraph state graph to generate accurate, level-appropriate explanations.
+
+## Technology inventory
+
 ### Frontend
-
-The frontend lives at the repository root under `src/`.
-
-Key areas:
-
-- `src/App.jsx` sets up theme, routing, auth, and progress providers.
-- `src/components/layout/Layout.jsx` owns the app shell and global chat widget.
-- `src/components/chat/GlobalChatbot.jsx` handles chat sessions, SSE streaming, voice input, and speech playback.
-- `src/context/AuthContext.jsx` manages Firebase anonymous auth and Google sign-in.
-- `src/context/ProgressContext.jsx` syncs local and backend lesson progress.
-- `src/pages/CourseMap.jsx` renders the lesson map.
-- `src/pages/LessonPlayer.jsx` runs the lesson slide flow.
-- `src/data/lessons/` contains the lesson content used by the frontend.
+* **React 19 & Vite**: Single-page application build tooling and runtime.
+* **React Router 7**: Client-side declarative routing with SPA rewrite support.
+* **Material UI & Tailwind CSS 4**: Design system, responsive layout primitives, and styling tokens.
+* **Lucide React**: Vector iconography.
+* **Firebase JS SDK**: Client-side authentication and session token handling.
 
 ### Backend
+* **FastAPI & Uvicorn**: Asynchronous REST and Server-Sent Events API.
+* **Pydantic & Pydantic Settings**: Strict data validation, schema enforcement, and environment parsing.
+* **SQLAlchemy 2.0 & Alembic**: Object-relational mapping, connection pooling, and database schema migrations.
+* **psycopg 3**: PostgreSQL database adapter.
+* **Firebase Admin SDK**: Server-side cryptographic token verification.
+* **LangChain & LangGraph**: AI agent orchestration, tool routing, state graphs, and memory management.
+* **Google GenAI SDK & langchain-google-genai**: Model access for `gemini-3.1-flash-lite` and `gemini-embedding-2`.
+* **py-fsrs**: Implementation of the Free Spaced Repetition Scheduler algorithm.
 
-The backend lives in `spanish_amigo_api/`.
+### Infrastructure and tooling
+* **PostgreSQL 18 (Neon)**: Relational database with `pgvector` extension.
+* **Vercel**: Production hosting for frontend and backend deployments.
+* **uv**: Python package management and virtual environment management.
+* **npm**: Node.js package management.
+* **Docker**: Containerized deployment specification.
+* **GitHub Actions**: Continuous integration, static analysis, unit testing, and dependency vulnerability scanning.
+* **mypy**: Static type analysis for backend Python code.
+* **pip-audit & npm audit**: Automated vulnerability auditing for Python and JavaScript dependencies.
 
-Key areas:
+## Database schema
 
-- `main.py` creates the FastAPI app, configures CORS, request logging, health checks, and routers.
-- `app/routers/progress.py` exposes protected progress endpoints.
-- `app/routers/chat.py` exposes protected chat, streaming, session, history, and explanation endpoints.
-- `app/services/auth.py` verifies Firebase ID tokens with Firebase Admin SDK.
-- `app/services/ai.py` contains the LangGraph tutor workflow, guardrails, model fallback, memory saving, and lesson retrieval.
-- `app/models.py` defines SQLAlchemy models for users, lessons, chat sessions, chat messages, lesson slides, and system status.
-- `migrations/` contains Alembic migrations.
+The database schema is managed through Alembic (migration head: `c6d7e8f9a0b1`).
 
-## Tech Stack
+```text
+users
+  |-- completed_lessons (user_id -> users.id)
+  |-- chat_sessions (user_id -> users.id)
+  |     `-- chat_messages (session_id -> chat_sessions.id)
+  |-- learner_skill_states (user_id -> users.id, skill_id -> skills.skill_id)
+  |-- assessment_events (user_id -> users.id, skill_id -> skills.skill_id)
+  |-- practice_attempts (user_id -> users.id, skill_id -> skills.skill_id)
+  |-- review_items (user_id -> users.id, skill_id -> skills.skill_id)
+        `-- review_history (review_item_id -> review_items.id)
 
-| Area | Technology |
-| --- | --- |
-| Frontend | React 19, Vite |
-| Routing | React Router |
-| UI | Material UI, Tailwind CSS, Lucide React |
-| Auth | Firebase Authentication, Firebase Admin SDK |
-| Backend | FastAPI, Uvicorn |
-| AI Orchestration | LangGraph, LangChain |
-| LLM Provider | Google Gemini |
-| Realtime Transport | Server-Sent Events (SSE) |
-| Database | Neon Postgres, Postgres-compatible databases |
-| Vector Search | pgvector |
-| ORM And Migrations | SQLAlchemy 2.0, Alembic |
-| Validation And Config | Pydantic, Pydantic Settings |
-| Package Management | npm, uv |
-| Containerization | Docker |
-| Deployment | Vercel (Frontend), Docker-ready container (Backend) |
-| CI And Security | GitHub Actions, Dependabot, pip-audit, npm audit |
+skills
+  `-- lesson_slide_skills (skill_id -> skills.skill_id, lesson_slide_id -> lesson_slides.id)
+        `-- lesson_slides (stores content, 768-dim embeddings, tsvector)
 
-## Repository Layout
+system_status (key-value application status and seed tracking)
+```
+
+### Table descriptions
+
+* `users`: Stores user identity, primary key matching the Firebase UID string.
+* `completed_lessons`: Records lesson completions per learner, constrained by unique `(user_id, lesson_id)`.
+* `chat_sessions`: Named multi-session conversation threads belonging to users.
+* `chat_messages`: Individual user and assistant turns linked to sessions.
+* `lesson_slides`: Course curriculum slides, slide types, explanations, 768-dimensional `pgvector` embeddings, CEFR levels, difficulties, learning objectives, and `tsvector` full-text search columns.
+* `skills`: The 14 stable curriculum skills with category, difficulty, CEFR level, and assessment mode constraints.
+* `lesson_slide_skills`: Join table mapping lesson slides to curriculum skill IDs.
+* `learner_skill_states`: Per-learner skill state tracking mastery estimates (0.0 to 1.0), confidence levels, accepted evidence counts, and attempt histories.
+* `assessment_events`: Append-only audit log of proposed and validated assessment items, error classifications, evidence spans, and validator decisions.
+* `practice_attempts`: Recorded practice submissions, snapshotting prompts, student answers, assistance levels, and recall outcomes.
+* `review_items`: FSRS card state per user and skill, tracking card status, stability, difficulty, and next due timestamp.
+* `review_history`: Immutable log of FSRS scheduler transitions and card rating changes.
+* `system_status`: Application state keys and metadata tracking.
+
+## Repository structure
 
 ```text
 .
 |-- .github/
-|   |-- dependabot.yml
+|   |-- dependabot.yml              # Automated dependency update configuration
 |   `-- workflows/
-|       |-- backend-ci.yml
-|       `-- dependency-security.yml
-|-- public/
+|       |-- backend-ci.yml          # Python tests, mypy, and lockfile validation
+|       `-- dependency-security.yml # pip-audit, npm audit, and dependency review
+|-- docs/                           # Architecture references and development guides
+|-- public/                         # Static assets and favicon
 |-- src/
-|   |-- api/
+|   |-- api/                        # Frontend API client endpoints
 |   |-- components/
-|   |   |-- auth/
-|   |   |-- chat/
-|   |   |-- layout/
-|   |   `-- lesson/
-|   |-- context/
+|   |   |-- auth/                   # Authentication modal and trigger components
+|   |   |-- chat/                   # Floating chat widget, session manager, voice
+|   |   |-- common/                 # Reusable UI components
+|   |   |-- course/                 # Course map journey, panels, and My Spanish
+|   |   |-- layout/                 # Main application shell and navigation
+|   |   `-- lesson/                 # Context, reveal, quiz, and completion slides
+|   |-- context/                    # React Context providers (Auth, Progress, Theme)
 |   |-- data/
-|   |   `-- lessons/
-|   |-- hooks/
-|   |-- pages/
-|   |-- theme/
-|   `-- utils/
+|   |   `-- lessons/                # Frontend lesson content definitions (Lessons 1-5)
+|   |-- hooks/                      # Custom React hooks
+|   |-- pages/                      # Top-level view routes (CourseMap, LessonPlayer)
+|   `-- theme/                      # MUI and Tailwind design tokens
 |-- spanish_amigo_api/
 |   |-- app/
-|   |   |-- routers/
-|   |   |-- services/
-|   |   |-- config.py
-|   |   |-- database.py
-|   |   |-- models.py
-|   |   `-- schemas.py
-|   |-- migrations/
-|   |-- tests/
-|   |-- Dockerfile
-|   |-- main.py
-|   |-- pyproject.toml
-|   `-- uv.lock
+|   |   |-- routers/                # API routes (adaptive, chat, progress)
+|   |   |-- services/               # Core services (adaptive, ai, auth, retrieval)
+|   |   |-- config.py               # Pydantic Settings configuration
+|   |   |-- curriculum_metadata.py  # 14 skills, taxonomy, and slide mappings
+|   |   |-- database.py             # SQLAlchemy session and engine setup
+|   |   |-- models.py               # SQLAlchemy database models
+|   |   `-- schemas.py              # Pydantic request and response schemas
+|   |-- evals/                      # Offline evaluation datasets and runners
+|   |-- migrations/                 # Alembic migration versions (head: c6d7e8f9a0b1)
+|   |-- tests/                      # Unit and integration test suites
+|   |-- Dockerfile                  # Container definition for backend service
+|   |-- main.py                     # FastAPI application entry point
+|   |-- pyproject.toml              # Python project metadata and dependencies
+|   |-- seed_embeddings.py          # Idempotent curriculum and embedding backfill
+|   `-- uv.lock                     # Deterministic Python dependency lockfile
 |-- index.html
 |-- package.json
 |-- package-lock.json
-|-- vite.config.js
-`-- vercel.json
+|-- vercel.json                     # Frontend SPA routing configuration
+`-- vite.config.js
 ```
 
-Local-only files such as `.env`, `.env.local`, `dist/`, `node_modules/`, generated lesson data, and backend runbooks are intentionally ignored by Git.
-
-## Local Development
+## Local development
 
 ### Prerequisites
 
-- Node.js and npm.
-- Python 3.12 or newer.
-- `uv` for the backend Python environment.
-- Firebase project with Authentication enabled.
-- Postgres database.
-- Gemini API key.
-- Optional: Postgres database with `pgvector` enabled for lesson retrieval.
+* Node.js (v20 or newer) and npm.
+* Python (v3.12 or newer) and `uv`.
+* PostgreSQL instance with `pgvector` enabled (such as Neon).
+* Firebase project with Authentication (Anonymous and Google Sign-in enabled).
+* Google Gemini API key.
 
-### Frontend Setup
+### 1. Clone repository
 
-Install dependencies from the repository root:
+```bash
+git clone https://github.com/farazkhan-05/SpanishAmigo-Production-RAG-Application-with-Real-Time-AI-Chat.git
+cd SpanishAmigo-Production-RAG-Application-with-Real-Time-AI-Chat
+```
+
+### 2. Configure frontend
+
+Install dependencies:
 
 ```bash
 npm install
 ```
 
-Create `.env.local`:
+Create `.env.local` in the project root:
 
 ```env
 VITE_FIREBASE_API_KEY=your_firebase_api_key
@@ -196,194 +293,174 @@ VITE_FIREBASE_APP_ID=your_firebase_app_id
 VITE_API_BASE_URL=http://127.0.0.1:8000
 ```
 
-Run the frontend:
+Start the Vite development server:
 
 ```bash
 npm run dev
 ```
 
-### Backend Setup
+### 3. Configure backend
 
-From the backend directory:
+Navigate to the backend directory and synchronize dependencies:
 
 ```bash
 cd spanish_amigo_api
-uv sync
+uv sync --locked
 ```
 
 Create `spanish_amigo_api/.env`:
 
 ```env
 ENV=development
-DATABASE_URL=postgresql+psycopg://user:password@host:5432/database
+DATABASE_URL=postgresql+psycopg://username:password@localhost:5432/spanish_amigo
 GEMINI_API_KEY=your_gemini_api_key
 FIREBASE_PROJECT_ID=your_firebase_project_id
 ALLOWED_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 AUTH_ALLOW_INSECURE_DEV_TOKENS=false
 LOG_LEVEL=INFO
-```
-
-Optional model overrides:
-
-```env
 GEMINI_PRIMARY_MODEL=gemini-3.1-flash-lite
 GEMINI_BACKUP_MODEL=gemma-4-31b
 GEMINI_EMBEDDING_MODEL=gemini-embedding-2
+ADAPTIVE_V2_PLANNER_ENABLED=false
 ```
 
-Apply migrations and start the API:
+### 4. Database migrations and seeding
+
+Apply Alembic migrations to create tables and vector indexes:
 
 ```bash
-uv run alembic upgrade head
-uv run uvicorn main:app --reload --host 127.0.0.1 --port 8000
+uv run --locked alembic upgrade head
 ```
 
-Health check:
+Run the idempotent curriculum and embedding backfill script:
+
+```bash
+uv run --locked python seed_embeddings.py
+```
+
+The seeding script evaluates existing database records against the curriculum taxonomy. It upserts the 14 skills, populates lesson slides and slide-to-skill join tables, and generates 768-dimensional embeddings for any new or modified slides without recreating existing vectors.
+
+### 5. Start backend server
+
+```bash
+uv run --locked uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Verify backend health:
 
 ```bash
 curl http://127.0.0.1:8000/health
 ```
 
-## Environment Variables
+## Configuration and environment variables
 
-### Frontend
+### Frontend variables (`.env.local`)
 
-| Variable | Purpose |
+| Variable | Description |
 | --- | --- |
-| `VITE_FIREBASE_API_KEY` | Firebase web API key. |
-| `VITE_FIREBASE_AUTH_DOMAIN` | Firebase auth domain. |
-| `VITE_FIREBASE_PROJECT_ID` | Firebase project ID. |
+| `VITE_FIREBASE_API_KEY` | Firebase Web API key for client-side authentication. |
+| `VITE_FIREBASE_AUTH_DOMAIN` | Firebase Authentication domain. |
+| `VITE_FIREBASE_PROJECT_ID` | Firebase project identifier. |
 | `VITE_FIREBASE_STORAGE_BUCKET` | Firebase storage bucket. |
-| `VITE_FIREBASE_MESSAGING_SENDER_ID` | Firebase sender ID. |
-| `VITE_FIREBASE_APP_ID` | Firebase app ID. |
-| `VITE_API_BASE_URL` | Base URL for the FastAPI backend. |
+| `VITE_FIREBASE_MESSAGING_SENDER_ID` | Firebase Cloud Messaging sender ID. |
+| `VITE_FIREBASE_APP_ID` | Firebase application identifier. |
+| `VITE_API_BASE_URL` | Base URL pointing to the running FastAPI backend. |
 
-### Backend
+### Backend variables (`spanish_amigo_api/.env`)
 
-| Variable | Purpose |
-| --- | --- |
-| `ENV` | Runtime environment name. |
-| `DATABASE_URL` | Postgres connection string. |
-| `GEMINI_API_KEY` | Gemini API key for tutor responses and embeddings. |
-| `FIREBASE_PROJECT_ID` | Firebase project used for token verification. |
-| `ALLOWED_CORS_ORIGINS` | Comma-separated frontend origins allowed by FastAPI CORS. |
-| `AUTH_ALLOW_INSECURE_DEV_TOKENS` | Kept false. Firebase tokens are verified cryptographically. |
-| `LOG_LEVEL` | Backend log level. |
-| `GEMINI_PRIMARY_MODEL` | Primary Gemini chat model. |
-| `GEMINI_BACKUP_MODEL` | Backup model used after quota or provider failures. |
-| `GEMINI_EMBEDDING_MODEL` | Embedding model for lesson retrieval. |
+| Variable | Description | Default |
+| --- | --- | --- |
+| `ENV` | Application runtime environment name. | `development` |
+| `DATABASE_URL` | PostgreSQL connection URI (`postgresql+psycopg://...`). | Required |
+| `GEMINI_API_KEY` | Google Gemini API key for chat, RAG, and embeddings. | Required |
+| `FIREBASE_PROJECT_ID` | Firebase project ID used for token verification. | `spanishamigo-8016a` |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Optional JSON string containing service account credentials. | `""` |
+| `ALLOWED_CORS_ORIGINS` | Comma-separated list of allowed client origins. | `http://localhost:5173,http://127.0.0.1:5173` |
+| `AUTH_ALLOW_INSECURE_DEV_TOKENS` | Permits mock authentication tokens for test suites. | `false` |
+| `LOG_LEVEL` | Application logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). | `INFO` |
+| `GEMINI_PRIMARY_MODEL` | Primary model for conversational tutoring and assessment. | `gemini-3.1-flash-lite` |
+| `GEMINI_BACKUP_MODEL` | Fallback model used upon primary quota exhaustion. | `gemma-4-31b` |
+| `GEMINI_EMBEDDING_MODEL` | Embedding model for semantic slide retrieval. | `gemini-embedding-2` |
+| `ADAPTIVE_V2_PLANNER_ENABLED` | Feature flag activating the Adaptive V2 assessment engine. | `false` |
 
-## Database And Migrations
+### Production activation order
 
-The backend uses SQLAlchemy models and Alembic migrations.
+When deploying to production, follow this sequence:
 
-Run migrations locally:
+1. Deploy the backend API to the hosting platform.
+2. Execute database schema migrations (`alembic upgrade head`).
+3. Run the curriculum seeding script (`seed_embeddings.py`) to initialize skills and generate embeddings.
+4. Verify backend connectivity via the `/health` endpoint.
+5. Set `ADAPTIVE_V2_PLANNER_ENABLED=true` in the production environment settings and redeploy or restart the backend.
+6. Verify adaptive endpoints (`/adaptive/state`, `/adaptive/reviews/due`).
 
-```bash
-cd spanish_amigo_api
-uv run alembic upgrade head
-```
+## Authentication and security
 
-The current schema includes:
+* **Firebase token verification**: All protected endpoints require a valid Firebase bearer token. The backend verifies signature integrity, token expiration, and project claims via the Firebase Admin SDK.
+* **Tenant data isolation**: The verified Firebase UID serves as the authoritative partition key for all database entities (completed lessons, chat sessions, messages, skill states, assessment events, and review items).
+* **Anonymous usage quota**: Unauthenticated guest users are signed in anonymously and permitted up to three global chat interactions with Lumi before Google account sign-in is required.
+* **Deterministic validation guardrails**: Assessment proposals from language models are subjected to strict deterministic validation rules, preventing ungrounded LLM output from corrupting learner skill states.
+* **Input boundary constraints**: Request schemas enforce message character limits, string lengths, and parameter types using Pydantic.
+* **Dependency security audits**: Automated CI pipelines run `pip-audit`, `npm audit`, Dependabot updates, and GitHub Dependency Review against pinned lockfiles (`uv.lock`, `package-lock.json`).
 
-- `users`
-- `completed_lessons`
-- `chat_sessions`
-- `chat_messages`
-- `lesson_slides`
-- `system_status`
+## Quality assurance and evaluation
 
-Apply migrations to target database:
+### Automated testing
 
-```bash
-cd spanish_amigo_api
-uv run alembic upgrade head
-```
-
-## Optional Lesson Retrieval Seeding
-
-The AI tutor can use lesson-slide context through `lesson_slides` embeddings. This path is optional for local development. The app can run without seeded lesson embeddings, but retrieval quality improves when embeddings are present.
-
-The seeder is located at:
-
-```text
-spanish_amigo_api/seed_embeddings.py
-```
-
-It expects a generated `lessons_data.json` file at the repository root. That generated file is intentionally ignored because it is build data, not source code.
-
-Run the seeder from the backend directory after the generated lesson JSON exists:
-
-```bash
-cd spanish_amigo_api
-uv run python seed_embeddings.py
-```
-
-## Quality Checks
-
-Frontend:
+Frontend linting and production build verification:
 
 ```bash
 npm run lint
 npm run build
 ```
 
-Backend:
+Backend unit and integration test suite:
 
 ```bash
 cd spanish_amigo_api
-uv run python -m unittest discover -s tests -p "test_*.py"
+uv run --locked python -m unittest discover -s tests -p "test_*.py"
 ```
 
-Backend type checks used by CI:
+Backend static type checking:
 
 ```bash
 cd spanish_amigo_api
-uv run --with mypy mypy app/config.py app/services/auth.py app/services/health.py main.py --config-file mypy.ini
+uv run --locked --with mypy mypy app/config.py app/services/auth.py app/services/health.py main.py --config-file mypy.ini
 ```
 
-Dependency audits:
+Dependency security scanning:
 
 ```bash
 npm audit --omit=dev --audit-level=high
 
 cd spanish_amigo_api
-uv run --with pip-audit pip-audit --desc
+uv run --locked --with pip-audit pip-audit --desc
+```
+
+### Offline evaluation framework
+
+The repository includes an offline evaluation framework under `spanish_amigo_api/evals/` designed to test tutor behavior and assessment accuracy without external API calls:
+
+* `golden_cases.jsonl`: Curated baseline cases verifying conversational and pedagogical boundaries.
+* `phase5_cases.jsonl`: Validation cases verifying deterministic assessability gating, modality checks, and evidence extraction.
+* `phase7_cases.jsonl`: End-to-end evaluation cases for turn planning and pedagogical action selection.
+
+Run offline evaluation suites:
+
+```bash
+cd spanish_amigo_api
+uv run --locked python evals/run_eval.py offline
 ```
 
 ## Deployment
 
-### Frontend
+The production deployment runs on serverless and managed cloud infrastructure:
 
-The frontend is configured for Vercel. `vercel.json` rewrites all routes to `index.html` so React Router can handle client-side navigation. Production builds require `VITE_API_BASE_URL` pointing to the active backend API.
+* **Frontend hosting**: Vercel handles static site generation and client-side routing via `vercel.json`.
+* **Backend hosting**: Vercel runs the FastAPI application.
+* **Database**: Neon PostgreSQL 18 provides managed PostgreSQL with the `pgvector` extension.
+* **Container configuration**: `spanish_amigo_api/Dockerfile` provides a standalone Python 3.12 container definition for container-based environments.
 
-### Backend
+## Current scope and boundaries
 
-The backend is containerized using `spanish_amigo_api/Dockerfile` (`uv`-based Python 3.12 image). It exposes the FastAPI application on port 8000 (or the environment-configured `$PORT`) with a built-in health check on `/health`.
-
-## Security And Reliability Notes
-
-- Firebase ID tokens are verified by the backend with Firebase Admin SDK.
-- Progress, chat, history, session, explanation, and adaptive endpoints require authenticated Firebase users.
-- The backend enforces Firebase UID ownership on user-scoped routes.
-- Anonymous users are limited to three global Lumi chat messages before Google sign-in is required.
-- Chat request payloads are validated with Pydantic, including a maximum message length.
-- Chat history context is capped before being sent into AI workflows.
-- Streaming chat logs SSE generator failures with exception details while still returning a user-facing fallback message.
-- Background database work opens fresh SQLAlchemy sessions instead of reusing request-scoped sessions.
-- AI guardrails classify longer inputs and block obvious off-topic, unsafe, or prompt-injection requests.
-- Backend environments configure `DATABASE_URL` and `GEMINI_API_KEY`.
-- Dependency security is checked with Dependabot, `npm audit`, `pip-audit`, and GitHub dependency review.
-
-## Current Status
-
-SpanishAmigo is feature-complete as a solo portfolio project. The main user journey works end to end:
-
-1. Open the app as a guest.
-2. Start lesson 1.
-3. Sign in with Google to continue.
-4. Complete lessons and sync progress.
-5. Ask Lumi for explanations and chat help.
-6. Return later and load saved chat sessions and progress.
-
-The remaining work is product polish rather than missing infrastructure: more lesson content, richer analytics, broader browser testing, and optional rate limiting for expensive AI endpoints.
+SpanishAmigo currently provides five structured beginner lessons covering core A1 Spanish concepts. The underlying technical infrastructure (RAG retrieval pipeline, LangGraph state orchestration, deterministic assessment validation, and FSRS spaced repetition scheduling) is designed to support expanded curricula, while the authored lesson content remains focused on foundational beginner scenarios.

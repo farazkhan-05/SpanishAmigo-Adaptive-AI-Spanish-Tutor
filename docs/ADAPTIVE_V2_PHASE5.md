@@ -34,7 +34,7 @@ Confidence is an uncalibrated model signal, not probability or mastery confidenc
 
 The source turn produces at most one append-only final validation record containing proposal fields, evidence and normalized evidence, optional exact span, validation status/reason, taxonomy, validator, schema version, and configured model identifier. Status is `accepted`, `rejected`, `ambiguous`, `invalid`, or `low_confidence`; Phase 4's `proposed` value remains available for explicitly unvalidated internal ingestion. A server-derived key hashes the session and conversation prefix/current turn, and the existing per-user unique constraint prevents duplicate accepted evidence on retry.
 
-Assessment persistence occurs after validation and before final generation. It concerns the already-submitted learner message, so a later failed stream does not erase it. A failed stream does not create a practice attempt, successful recall, mastery update, or review. `learner_skill_states.mastery_estimate` and `estimate_confidence` remain untouched and state rows are not fabricated.
+Assessment events persist after validation and before final generation, so a subsequent streaming failure does not drop the audit record for the submitted learner message. A failed stream does not create a practice attempt, successful recall, mastery update, or review. `learner_skill_states.mastery_estimate` and `estimate_confidence` remain untouched and state rows are not fabricated.
 
 ## Deterministic pedagogical policy
 

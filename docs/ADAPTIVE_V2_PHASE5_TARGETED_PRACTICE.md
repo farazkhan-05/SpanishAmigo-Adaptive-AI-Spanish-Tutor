@@ -34,5 +34,5 @@ Targeted endpoints are:
 - `POST /adaptive/practice/{attempt_id}/submit`
 
 The source-event and submission keys make start and submit retries idempotent.
-Telemetry reuses the existing content-free adaptive failure fields; learner
-response text is not sent to telemetry. Course completion is not touched.
+Telemetry reuses content-free adaptive failure fields without transmitting learner
+response text. Course completion state is unchanged.

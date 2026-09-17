@@ -5,7 +5,7 @@ Use a fresh authenticated test learner so the learner's own chat session and lea
 1. Open Lumi and make a supported taught grammar mistake in a Spanish sentence.
 2. Observe Lumi's correction. If the server marks the turn eligible, choose **Practice this skill** and read the server-issued exercise.
 3. Submit a new Spanish answer in the targeted-practice dialog.
-4. Observe the truthful assessment result. An accepted result updates **My Spanish** automatically; rejected or inconclusive answers do not pretend to update it.
+4. Observe the assessment result. An accepted result updates **My Spanish** automatically; rejected or inconclusive answers leave **My Spanish** unchanged.
 5. Return to **My Spanish** and observe the skill status and practice evidence refresh without a full-page reload.
 6. When the response includes a scheduled review, note the learner-friendly **Next review** time.
 7. Return when that review becomes due. Review timing is controlled by FSRS and may not become due immediately.

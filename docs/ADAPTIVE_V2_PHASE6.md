@@ -18,7 +18,7 @@ Estimate confidence is accumulated evidence strength, not model confidence: inde
 
 Uses PyPI `fsrs==6.3.2` / upstream `open-spaced-repetition/py-fsrs`, defaults with fuzzing disabled for reproducibility. `review_items` persists card state, step, stability, difficulty, due and last-review timestamps (UTC), plus library/scheduler version. `review_history` persists source event/attempt, previous and resulting serialized card state, due date, rating, and versions.
 
-Application-owned rating mapping: independent incorrect = Again; correct hinted/guided or partial assisted = Hard; correct independent = Good; Easy is never automatic. Explanation is never a successful review.
+Application-owned rating mapping: independent incorrect = Again; correct hinted/guided or partial assisted = Hard; correct independent = Good; Easy is never automatic. Viewing an explanation never counts as a completed review.
 
 Authenticated endpoints are `GET /adaptive/reviews/due`, `GET /adaptive/reviews/next`, `POST /adaptive/reviews/{review_id}/start`, and `POST /adaptive/reviews/{review_id}/submit`.
 

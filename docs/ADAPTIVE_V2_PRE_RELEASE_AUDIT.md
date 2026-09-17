@@ -32,7 +32,7 @@ Audit date: 2026-09-15. Audited commit baseline: `b2a9a42` on `feature/adaptive-
 
 - MEDIUM (fixed): an accepted independent `partial` review assessment had no FSRS rating and therefore aborted its otherwise valid transaction. Partial recall now maps to the conservative `Hard` rating, with endpoint coverage.
 - MEDIUM (fixed): concurrent first accepted events for one learner could both observe absent learner-state/review-card rows. `process_accepted_evidence` now locks the verified owner row before reading or creating authoritative state.
-- MEDIUM (fixed): the historical chat-session migration created an unnamed FK but tried to drop a `None` constraint. It now explicitly uses PostgreSQL's legacy default name, `chat_messages_session_id_fkey`, allowing fresh and already-upgraded PostgreSQL chains to resolve the same downgrade target.
+- MEDIUM (fixed): the historical chat-session migration created an unnamed foreign key and attempted to drop a constraint named `None`. It now explicitly uses PostgreSQL's legacy default name, `chat_messages_session_id_fkey`, allowing fresh and previously upgraded PostgreSQL chains to resolve the same downgrade target.
 - LOW: Vite emits a 1.36 MB minified JavaScript chunk warning and Browserslist data is stale. Neither changes adaptive authority or release safety.
 
 No HIGH finding was confirmed. No frontend redesign, feature activation change, commit, or push was made.

@@ -8,7 +8,7 @@ SpanishAmigo evolves from a stateful RAG tutor into an auditable adaptive learni
 
 `Observe -> Diagnose -> Validate -> Decide -> Practice -> Verify -> Review`
 
-The differentiator is evidence-backed long-term personalization, not more autonomous AI.
+The architecture prioritizes evidence-backed long-term personalization over increasing AI autonomy.
 
 ## 2. Existing baseline that must survive
 
@@ -25,7 +25,7 @@ Baseline note at time of contract: active backend deployment target was not veri
 
 ## 3. Learner-state semantics
 
-Future concepts are stable skills, an unknown/unassessed state, mastery estimate, confidence in that estimate, evidence volume, misconceptions, review state, and evidence provenance. No schema is created by this contract.
+This contract defines future concepts—stable skills, an unknown/unassessed state, mastery estimate, confidence in that estimate, evidence volume, misconceptions, review state, and evidence provenance—without creating database schemas.
 
 `UNKNOWN != 0%` and `UNKNOWN != 50%`. Unknown means there is not yet sufficient evidence to make a learner claim.
 

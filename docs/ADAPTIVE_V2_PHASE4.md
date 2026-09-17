@@ -4,7 +4,7 @@ Phase 4 adds persistence only. It does not assess chat, calculate mastery, sched
 
 ## Learner state and unknown semantics
 
-`learner_skill_states` has one tenant UID + stable `skill_id` row where a future service needs a durable state container. `mastery_estimate` and `estimate_confidence` are nullable and `NULL` means **unknown**, never zero or a midpoint. Counters begin at zero and this phase has no production writer that calculates or assigns a mastery estimate. State rows are not created for contextual skills through the public storage helper.
+`learner_skill_states` stores durable state keyed by tenant UID and stable `skill_id`. `mastery_estimate` and `estimate_confidence` are nullable and `NULL` means **unknown**, never zero or a midpoint. Counters begin at zero and this phase has no production writer that calculates or assigns a mastery estimate. State rows are not created for contextual skills through the public storage helper.
 
 `GET /adaptive/state` is authenticated and always scopes its query to the verified Firebase UID. It returns the taxonomy's display label and mode, with `not_assessed`, `evidence_insufficient`, or `assessed` status. An absent row is returned honestly as `not_assessed`; no client identity or write operation is accepted.
 
@@ -20,7 +20,7 @@ Both records support a server-created, trusted `source_event_key`, unique per us
 
 ## Provenance, taxonomy, and deletion
 
-ChatSession and ChatMessage remain optional provenance. Event and attempt tables use `ON DELETE SET NULL` for those source references, while retaining the minimal learner evidence/prompt/response snapshot needed to explain a historical record after chat deletion. User deletion cascades tenant-owned state, events, and attempts, consistent with current user-owned chat/progress cascades. There is no separate account-deletion workflow in the current source; a future account-deletion implementation must include these tables. There is no permanent-retention policy added here.
+ChatSession and ChatMessage remain optional provenance. Event and attempt tables use `ON DELETE SET NULL` for those source references, while retaining the minimal learner evidence/prompt/response snapshot needed to explain a historical record after chat deletion. User deletion cascades tenant-owned state, events, and attempts, consistent with current user-owned chat/progress cascades. The codebase currently lacks an account-deletion workflow; future deletion implementations must include these tables. No permanent-retention policy is introduced here.
 
 Taxonomy identity is the static stable `skill_id`; events and attempts retain `spanishamigo-v1` for historical interpretation rather than duplicating the full taxonomy. The `mastery_eligibility` foundation returns true only for text-mode skills with text evidence. It is deliberately a narrow predicate, not an acceptance or mastery algorithm: speech-required skills require a future speech-specific validator, contextual skills cannot become atomic mastery targets through the helper, and broad vocabulary skills get no domain-wide inference from an event or attempt.
 

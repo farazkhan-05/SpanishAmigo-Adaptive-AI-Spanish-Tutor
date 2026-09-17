@@ -31,7 +31,7 @@ This section distinguishes the previously deployed Adaptive V2 baseline from the
 default for `ADAPTIVE_V2_PLANNER_ENABLED` remains `false`, while the previously verified production environment had
 that flag set to `true`. Production retrieval remains `B_legacy`.
 
-Subsequent to the 2026-09-15 offline evaluation run, operational release gates were executed and verified against live infrastructure:
+After the 2026-09-15 offline evaluation run, operational release gates were verified against live infrastructure:
 
 - **PostgreSQL and pgvector migrations**: Verified against live PostgreSQL; the previously deployed production Neon database reached head `c6d7e8f9a0b1`.
 - **Curriculum seeding and idempotency**: Verified in production; 14 skills in `skills`, 231 slides in `lesson_slides`, and 382 associations in `lesson_slide_skills` seeded with real `gemini-embedding-2` 768-dimensional vectors. Second execution confirmed idempotency (0 inserts, 0 updates, 245 unchanged, 0 failures).
@@ -108,7 +108,7 @@ uv run python -m evals.run_eval retrieval-benchmark --limit 5 --confirm-live --r
 
 - **Hit@3 delta**: -0.0267 (95% CI [-0.0667, 0.0000]; interval includes zero on the upper boundary).
 - **MRR delta**: -0.0222 (95% CI [-0.0578, +0.0133]; interval includes zero).
-- **Recall@3 delta**: -0.0467 (95% CI [-0.0933, -0.0133]; **the 95% paired bootstrap confidence interval strictly excludes zero**, demonstrating that the observed recall degradation is statistically distinguishable from zero under this bootstrap interval).
+- **Recall@3 delta**: -0.0467 (95% CI [-0.0933, -0.0133]; interval strictly excludes zero, indicating statistically distinguishable recall degradation).
 
 ### Empirical findings and production recommendation
 
@@ -139,7 +139,7 @@ uv run python -m evals.run_eval live-eval --limit 3 --confirm-live
 
 ## Live LLM Tutor & Assessment Evaluation Suite (2026-09-16)
 
-The live evaluation suite evaluates real Gemini runtime interactions (`gemini-3.1-flash-lite`) across tutoring and assessment without mutating the learner's persisted mastery, session history, or review schedule.
+The live evaluation suite tests Gemini runtime interactions (`gemini-3.1-flash-lite`) across tutoring and assessment without mutating persisted mastery, session history, or review schedules.
 
 - **Dataset**: `evals/live_eval_cases.jsonl` (50 curriculum-grounded synthetic cases; SHA-256 `56e1f23739e2f898542534df3aaf2e6a7457f1a565ae8b9e3e0f786045124890`).
 - **Annotation Provenance**: Source-grounded, repository-owned, evaluator-authored, curriculum-validated, not independently human-reviewed.
@@ -177,7 +177,7 @@ Metrics are never combined into an opaque aggregate score:
    - Evaluation-run latency percentiles (P50, P95, mean in milliseconds) for generation, assessment, and judge. Clearly designated as descriptive operational evidence, not hard CI/regression gates.
 8. **Token Usage**:
    - Genuine provider token counts (`prompt_tokens`, `candidate_tokens`, `total_tokens`) extracted directly from `response.usage_metadata` with zero estimation for executed calls.
-   - Estimated counterfactual token savings clearly labeled as estimates with transparent methodology (`skipped_assessments * mean_assessment_prompt_tokens`).
+   - Counterfactual token savings are estimated as `skipped_assessments * mean_assessment_prompt_tokens`.
 9. **Probabilistic LLM-as-a-Judge Evaluation (Optional)**:
    - Structured rubric evaluation (`TutorJudgeEvaluation`, 1–5 scale, strictly bounded Pydantic schema) across 8 dimensions: `curriculum_groundedness`, `factual_correctness`, `correction_quality`, `pedagogical_appropriateness`, `learner_level_appropriateness`, `clarity`, `unnecessary_over_correction`, `response_relevance`.
    - Explicit disclosure of the same-family judge limitation (`judge_same_family_limitation = YES` when both generator and judge use Gemini).

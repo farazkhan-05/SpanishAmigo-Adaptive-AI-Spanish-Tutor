@@ -6,6 +6,6 @@ Mappings are static in `app/curriculum_metadata.py`, versioned, and auditable. N
 
 `python seed_embeddings.py --dry-run` reports inserted, updated, unchanged, unresolved, failures, and embeddings generated. A normal run uses upserts and preserves valid embeddings; it requests an embedding only for a missing embedding or a changed source. It never drops, truncates, or recreates `lesson_slides`.
 
-The additive migration creates `skills`, `lesson_slide_skills`, audited slide metadata, a `simple` PostgreSQL full-text vector (chosen for mixed English prompt/Spanish answer text), its GIN index, and the lesson/slide uniqueness constraint. It first detects duplicates and aborts rather than deleting them.
+The additive migration creates `skills`, `lesson_slide_skills`, audited slide metadata, a `simple` PostgreSQL full-text vector for mixed English prompt/Spanish answer text, its GIN index, and the lesson/slide uniqueness constraint. Before creating the constraint, the migration checks for duplicates and aborts rather than deleting them.
 
 Retrieval has `B_legacy`, metadata-aware semantic, lexical, and hybrid strategies. Hybrid uses reciprocal-rank fusion with k=60, deterministic tie-breaking by lesson/slide identity, and deduplication. The tutor still calls only `B_legacy`; hybrid is evaluation-only pending measured evidence.

@@ -558,9 +558,10 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
             top: { xs: '56px', sm: 'auto' },
             bottom: { xs: 0, sm: 24 },
             right: { xs: 0, sm: 24 },
+            left: { xs: 0, sm: 'auto' },
             width: { xs: '100%', sm: 360 },
-            height: { xs: 'calc(100vh - 56px)', sm: 520 },
-            maxHeight: '100vh',
+            height: { xs: 'calc(100dvh - 56px)', sm: 520 },
+            maxHeight: { xs: 'calc(100dvh - 56px)', sm: 'calc(100vh - 48px)' },
             display: isOpen ? 'flex' : 'none',
             flexDirection: 'column',
             zIndex: 1000,
@@ -582,6 +583,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
               justifyContent: 'space-between',
               color: '#1A1A1A',
               borderBottom: `3px solid ${darkMode ? '#555' : '#1A1A1A'}`,
+              flexShrink: 0,
             }}
           >
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -627,7 +629,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
             </Box>
           </Box>
 
-          <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <Box sx={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
 
             {/* Slide-out History Drawer */}
             <Box
@@ -647,7 +649,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
                 overflow: 'hidden'
               }}
             >
-              <Box sx={{ p: 1.5, borderBottom: `3px solid ${darkMode ? '#555' : '#1A1A1A'}`, background: darkMode ? '#252542' : '#FFE66D' }}>
+              <Box sx={{ p: 1.5, borderBottom: `3px solid ${darkMode ? '#555' : '#1A1A1A'}`, background: darkMode ? '#252542' : '#FFE66D', flexShrink: 0 }}>
                 <button
                   onClick={handleStartNewChat}
                   style={{
@@ -680,7 +682,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
                 </button>
               </Box>
 
-              <Box sx={{ flex: 1, overflowY: 'auto', p: 1.5, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+              <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', p: 1.5, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                 {sessions.length === 0 ? (
                   <Box sx={{ textAlign: 'center', py: 4 }}>
                     <Typography variant="caption" sx={{ color: darkMode ? '#888' : '#666', fontWeight: 700 }}>
@@ -793,7 +795,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
             </Box>
 
             {/* Messages Area */}
-            <Box sx={{ flex: 1, p: 1.5, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1.5, backgroundColor: darkMode ? '#1A1A2E' : '#FFFDF2' }}>
+            <Box sx={{ flex: 1, minHeight: 0, p: 1.5, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1.5, backgroundColor: darkMode ? '#1A1A2E' : '#FFFDF2' }}>
               {isHistoryLoading ? (
                 <Box sx={{ display: 'flex', flex: 1, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 1.5 }}>
                   <CircularProgress size={28} sx={{ color: '#4ECDC4' }} />
@@ -899,13 +901,29 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
             </Box>
 
             {practiceError && !practiceAttempt && (
-              <Alert severity="info" onClose={() => setPracticeError('')} sx={{ mx: 1.5, mb: 1, borderRadius: '10px' }}>
+              <Alert severity="info" onClose={() => setPracticeError('')} sx={{ mx: 1.5, mb: 1, borderRadius: '10px', flexShrink: 0 }}>
                 {practiceError}
               </Alert>
             )}
 
             {/* Input Area */}
-            <Box component="form" onSubmit={handleSend} sx={{ p: 1.5, background: darkMode ? '#252542' : '#FFE66D', borderTop: `3px solid ${darkMode ? '#555' : '#1A1A1A'}`, display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Box
+              component="form"
+              onSubmit={handleSend}
+              sx={{
+                p: 1.5,
+                pb: {
+                  xs: 'calc(12px + env(safe-area-inset-bottom, 0px))',
+                  sm: 1.5,
+                },
+                background: darkMode ? '#252542' : '#FFE66D',
+                borderTop: `3px solid ${darkMode ? '#555' : '#1A1A1A'}`,
+                display: 'flex',
+                gap: 1,
+                alignItems: 'center',
+                flexShrink: 0,
+              }}
+            >
               <IconButton
                 onClick={handleListen}
                 disabled={isLoading || isListening}
@@ -914,6 +932,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
                   color: isListening ? '#FF6B6B' : (darkMode ? '#FFFFFF' : '#1A1A1A'),
                   backgroundColor: isListening ? 'rgba(255, 107, 107, 0.15)' : 'transparent',
                   animation: isListening ? 'pulse 1.5s infinite' : 'none',
+                  flexShrink: 0,
                   '@keyframes pulse': {
                     '0%': { transform: 'scale(1)', boxShadow: '0 0 0 0 rgba(255, 107, 107, 0.7)' },
                     '70%': { transform: 'scale(1.1)', boxShadow: '0 0 0 8px rgba(255, 107, 107, 0)' },
@@ -955,6 +974,7 @@ const GlobalChatbot = ({ darkMode, onToggleTheme }) => {
                   borderRadius: '10px',
                   minWidth: '36px',
                   height: '36px',
+                  flexShrink: 0,
                   transition: 'all 0.15s ease',
                   '&:hover': { background: '#FF8787', transform: 'translate(-1px, -1px)', boxShadow: '3px 3px 0px #1A1A1A' },
                   '&:active': { transform: 'translate(2px, 2px)', boxShadow: '0px 0px 0px #1A1A1A' },
